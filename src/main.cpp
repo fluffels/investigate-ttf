@@ -12,6 +12,7 @@ INITIALIZE_EASYLOGGINGPP
 #include "DirectInput.h"
 #include "Mouse.h"
 #include "Present.h"
+#include "RenderMesh.h"
 #include "RenderText.h"
 #include "Vulkan.h"
 #include "Win32.h"
@@ -169,7 +170,10 @@ int MainLoop(
         }
     }
 
+    vector<VkCommandBuffer> meshCmds;
     vector<VkCommandBuffer> textCmds;
+
+    renderMesh(vk, meshCmds);
 
     DirectInput directInput(instance);
     Controller* controller = directInput.controller;
@@ -219,6 +223,7 @@ int MainLoop(
                 updateMVP(vk, &uniforms, sizeof(uniforms));
 
                 vector<vector<VkCommandBuffer>> cmdss;
+                cmdss.push_back(meshCmds);
                 cmdss.push_back(textCmds);
                 present(vk, cmdss);
                 resetTextCommandBuffers(vk, textCmds);

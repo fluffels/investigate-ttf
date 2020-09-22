@@ -40,6 +40,7 @@ add_executable(
     src/Controller.cpp
     src/Mouse.cpp
     src/Present.cpp
+    src/RenderMesh.cpp
     src/RenderText.cpp
     src/Win32.cpp
 )
