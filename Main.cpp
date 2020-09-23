@@ -181,21 +181,6 @@ int MainLoop(
         }
     }
 
-    // See progs/world.qc
-    vector<string> lightstyles;
-    lightstyles.push_back(string("m"));
-    lightstyles.push_back("mmnmmommommnonmmonqnmmo");
-    lightstyles.push_back("abcdefghijklmnopqrstuvwxyzyxwvutsrqponmlkjihgfedcba");
-    lightstyles.push_back("mmmmmaaaaammmmmaaaaaabcdefgabcdefg");
-    lightstyles.push_back("mamamamamama");
-    lightstyles.push_back("jklmnopqrstuvwxyzyxwvutsrqponmlkj");
-    lightstyles.push_back("nmonqnmomnmomomno");
-    lightstyles.push_back("mmmaaaabcdefgmmmmaaaammmaamm");
-    lightstyles.push_back("mmmaaammmaaammmabcdefaaaammmmabcdefmmmaaaa");
-    lightstyles.push_back("aaaaaaaazzzzzzzz");
-    lightstyles.push_back("mmamammmmammamamaaamammma");
-    lightstyles.push_back("abcdefghijklmnopqrrqponmlkjihgfedcba");
-
     vector<VkCommandBuffer> levelCmds;
     renderLevel(vk, *map, levelCmds);
     initModels(vk, parser, map->entities);
