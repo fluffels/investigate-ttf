@@ -156,7 +156,7 @@ int MainLoop(
     camera.farz = 10000.f;
     camera.eye = { 0, 0, 0 };
     camera.at = camera.eye;
-    camera.at.x += 1;
+    camera.at.z += -1;
     camera.up = { 0, 1, 0 };
 
     {
@@ -260,7 +260,7 @@ int MainLoop(
             if (keyboard['R']) {
                 camera.eye = { 0, 0, 0 };
                 camera.at = camera.eye;
-                camera.at.x += 1;
+                camera.at.z -= 1;
                 camera.up = { 0, 1, 0 };
             }
 

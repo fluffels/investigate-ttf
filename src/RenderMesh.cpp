@@ -26,11 +26,11 @@ void renderMesh(
     );
 
     auto& v0 = vertices.emplace_back();
-    v0.position = {-1, 1, 0};
+    v0.position = {-1, 1, -5};
     auto& v1 = vertices.emplace_back();
-    v1.position = {-1, 1, 0};
+    v1.position = {0, -1, -5};
     auto& v2 = vertices.emplace_back();
-    v2.position = {-1, 1, 0};
+    v2.position = {1, 1, -5};
 
     indices.push_back(0);
     indices.push_back(1);
