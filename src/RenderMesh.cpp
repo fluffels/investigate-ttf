@@ -26,11 +26,11 @@ void renderMesh(
     );
 
     auto& v0 = vertices.emplace_back();
-    v0.position = {-1, 1, -5};
+    v0.position = {-1, 1, 1};
     auto& v1 = vertices.emplace_back();
-    v1.position = {0, -1, -5};
+    v1.position = {0, -1, 1};
     auto& v2 = vertices.emplace_back();
-    v2.position = {1, 1, -5};
+    v2.position = {1, 1, 1};
 
     indices.push_back(0);
     indices.push_back(1);
@@ -51,7 +51,7 @@ void renderMesh(
         vk.device,
         pipeline.descriptorSet,
         0,
-        vk.mvp.handle
+        vk.uniforms.handle
     );
 
     uint32_t framebufferCount = vk.swap.images.size();

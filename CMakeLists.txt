@@ -3,10 +3,13 @@ set (CMAKE_CXX_STANDARD 17)
 
 project (vk-template)
 
+# add_definitions(-DVULKAN_MESH_SHADER)
+# add_definitions(-DVULKAN_PERFORMANCE_COUNTERS)
+
 find_package(Vulkan REQUIRED)
 
 set(GLSL_VALIDATOR "$ENV{VULKAN_SDK}/Bin/glslc.exe")
-file(GLOB_RECURSE GLSL_FILES "shaders/*.vert" "shaders/*.frag")
+file(GLOB_RECURSE GLSL_FILES "shaders/*.vert" "shaders/*.frag" "shaders/*.mesh")
 foreach(GLSL_FILE ${GLSL_FILES})
     set(SPIRV_FILE "${GLSL_FILE}.spv")
     add_custom_command(
@@ -21,29 +24,34 @@ add_custom_target(Shaders ALL DEPENDS ${SPIRV_FILES})
 include_directories(${CMAKE_HOME_DIRECTORY}/src)
 include_directories(${CMAKE_HOME_DIRECTORY}/lib)
 include_directories(${CMAKE_HOME_DIRECTORY}/lib/easyloggingpp/src)
-include_directories(${CMAKE_HOME_DIRECTORY}/lib/glm)
 include_directories(${CMAKE_HOME_DIRECTORY}/lib/jcwk)
 include_directories(${glm_INCLUDE_DIRS})
 include_directories(${Vulkan_INCLUDE_DIRS})
-add_executable(
-    main
-    WIN32
-    Shaders
+
+set(PLATFORM_INDEPENDENT_FILES 
     lib/jcwk/FileSystem.cpp
     lib/jcwk/Vulkan.cpp
     lib/SPIRV-Reflect/spirv_reflect.c
     lib/easyloggingpp/src/easylogging++.cc
-    src/Main.cpp
-    src/util.cpp
-    src/Camera.cpp
-    src/DirectInput.cpp
-    src/Controller.cpp
-    src/Mouse.cpp
-    src/Present.cpp
     src/RenderMesh.cpp
     src/RenderText.cpp
-    src/Win32.cpp
+    src/Render.cpp
+    src/State.cpp
 )
+
+IF (WIN32)
+    add_executable(
+        main
+        WIN32
+        Shaders
+        src/MainWin32.cpp
+        lib/jcwk/Win32/DirectInput.cpp
+        lib/jcwk/Win32/Controller.cpp
+        lib/jcwk/Win32/Mouse.cpp
+        ${PLATFORM_INDEPENDENT_FILES}
+    )
+ENDIF()
+
 target_link_libraries(
     main
     ${Vulkan_LIBRARIES}
