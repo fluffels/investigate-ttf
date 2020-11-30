@@ -1,8 +1,5 @@
 #pragma warning(disable: 4267)
 
-#define STB_IMAGE_IMPLEMENTATION
-#include "stb/stb_image.h"
-
 #include "MathLib.h"
 #include "RenderMesh.h"
 
