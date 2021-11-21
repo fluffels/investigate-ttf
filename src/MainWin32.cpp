@@ -1,20 +1,39 @@
+#include "vulkan/vulkan_core.h"
 #pragma warning (disable: 4267)
 #pragma warning (disable: 4996)
 
 #include <Windows.h>
 #include <cstdio>
+#include <map>
 
 #include "Logging.h"
 #include "FileSystem.cpp"
 #include "Vulkan.cpp"
 #include <vulkan/vulkan_win32.h>
 
+using std::map;
+
 const int WIDTH = 800;
 const int HEIGHT = 800;
 
-struct State {
-    // bool keyboard[VK_OEM_CLEAR] = {};
-} state;
+enum KEYBOARD_KEYS {
+    KEYBOARD_KEY_NONE,
+    KEYBOARD_KEY_FORWARD,
+    KEYBOARD_KEY_BACKWARD,
+    KEYBOARD_KEY_LEFT,
+    KEYBOARD_KEY_RIGHT,
+    KEYBOARD_KEY_RESET,
+    KEYBOARD_KEY_QUIT,
+    KEYBOARD_KEY_COUNT
+};
+
+struct Input {
+    bool keyboard_keys[KEYBOARD_KEY_COUNT];
+};
+
+struct Renderer {
+    std::map<const char*, VkPipeline> pipelines;
+};
 
 struct PipelineOptions pipelineOptions[] = {
     {
@@ -26,6 +45,102 @@ struct PipelineOptions pipelineOptions[] = {
         .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
     }
 };
+
+// ***********************************************
+// * FRAME: Everything required to draw a frame. *
+// ***********************************************
+
+void doFrame(Vulkan& vk, Input& input) {
+    // NOTE(jan): Acquire swap image.
+    uint32_t swapImageIndex = 0;
+    auto result = vkAcquireNextImageKHR(
+        vk.device,
+        vk.swap.handle,
+        std::numeric_limits<uint64_t>::max(),
+        vk.swap.imageReady,
+        VK_NULL_HANDLE,
+        &swapImageIndex
+    );
+    if ((result == VK_SUBOPTIMAL_KHR) ||
+        (result == VK_ERROR_OUT_OF_DATE_KHR)) {
+        // TODO(jan): Implement resize.
+        FATAL("could not acquire next image")
+    } else if (result != VK_SUCCESS) {
+        FATAL("could not acquire next image")
+    }
+
+    // NOTE(jan): Start recording commands.
+    VkCommandBuffer cmds = {};
+    createCommandBuffers(vk.device, vk.cmdPool, 1, &cmds);
+    beginFrameCommandBuffer(cmds);
+
+    // NOTE(jan): Clear colour / depth.
+    VkClearValue colorClear;
+    colorClear.color = {1.f, 0.f, 1.f, 1.f};
+    VkClearValue depthClear;
+    depthClear.depthStencil = {1.f, 0};
+    VkClearValue clears[] = {colorClear, depthClear};
+
+    // NOTE(jan): Render pass.
+    VkRenderPassBeginInfo beginInfo = {};
+    beginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    beginInfo.clearValueCount = 2;
+    beginInfo.pClearValues = clears;
+    beginInfo.framebuffer = vk.swap.framebuffers[swapImageIndex];
+    beginInfo.renderArea.extent = vk.swap.extent;
+    beginInfo.renderArea.offset = {0, 0};
+    beginInfo.renderPass = vk.renderPass;
+
+    vkCmdBeginRenderPass(cmds, &beginInfo, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdEndRenderPass(cmds);
+    endCommandBuffer(cmds);
+
+    // Submit.
+    VkSubmitInfo submitInfo = {};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmds;
+    submitInfo.waitSemaphoreCount = 1;
+    submitInfo.pWaitSemaphores = &vk.swap.imageReady;
+    VkPipelineStageFlags waitStages[] = {
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+    };
+    submitInfo.pWaitDstStageMask = waitStages;
+    submitInfo.signalSemaphoreCount = 1;
+    submitInfo.pSignalSemaphores = &vk.swap.cmdBufferDone;
+    vkQueueSubmit(vk.queue, 1, &submitInfo, VK_NULL_HANDLE);
+
+    // Present.
+    VkPresentInfoKHR presentInfo = {};
+    presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    presentInfo.swapchainCount = 1;
+    presentInfo.pSwapchains = &vk.swap.handle;
+    presentInfo.waitSemaphoreCount = 1;
+    presentInfo.pWaitSemaphores = &vk.swap.cmdBufferDone;
+    presentInfo.pImageIndices = &swapImageIndex;
+    VKCHECK(vkQueuePresentKHR(vk.queue, &presentInfo))
+
+    // PERF(jan): This is potentially slow.
+    vkQueueWaitIdle(vk.queue);
+}
+
+// ************************************************************
+// * INIT: Everything required to set up Vulkan pipelines &c. *
+// ************************************************************
+
+void init(Vulkan& vk) {
+    for (const PipelineOptions& options: pipelineOptions) {
+        INFO("Creating pipeline '%s'...", options.name);
+        VulkanPipeline pipeline = {};
+        initVKPipeline(vk, options, pipeline);
+    }
+}
+
+// **********************************
+// * WIN32: Windows specific stuff. *
+// **********************************
+
+Input input;
 
 LRESULT __stdcall
 WindowProc(
@@ -39,6 +154,11 @@ WindowProc(
             PostQuitMessage(0);
             break;
         case WM_KEYDOWN:
+            switch (wParam) {
+                case VK_ESCAPE: PostQuitMessage(0); break;
+                // TODO(jan): Key mapping.
+                case 'W': input.keyboard_keys[KEYBOARD_KEY_FORWARD] = true;
+            }
             if (wParam == VK_ESCAPE) PostQuitMessage(0);
             // else state.keyboard[(uint16_t)wParam] = true;
             break;
@@ -130,12 +250,8 @@ WinMain(
     // Initialize the rest of Vulkan.
     initVK(vk);
 
-    // Load shaders.
-    {
-        for (const PipelineOptions& options: pipelineOptions) {
-            INFO("%s", options.name);
-        }
-    }
+    // Load shaders, meshes, fonts, textures, and other resources.
+    init(vk);
 
     // NOTE(jan): Main loop.
     bool done = false;
@@ -157,74 +273,7 @@ WinMain(
             DispatchMessage(&msg);
         } while(messageAvailable);
 
-        // NOTE(jan): Acquire swap image.
-        uint32_t swapImageIndex = 0;
-        auto result = vkAcquireNextImageKHR(
-            vk.device,
-            vk.swap.handle,
-            std::numeric_limits<uint64_t>::max(),
-            vk.swap.imageReady,
-            VK_NULL_HANDLE,
-            &swapImageIndex
-        );
-        if ((result == VK_SUBOPTIMAL_KHR) ||
-            (result == VK_ERROR_OUT_OF_DATE_KHR)) {
-            // TODO(jan): implement resize
-            FATAL("could not acquire next image")
-        } else if (result != VK_SUCCESS) {
-            FATAL("could not acquire next image")
-        }
-
-        // NOTE(jan): Start recording commands.
-        VkCommandBuffer cmds = {};
-        createCommandBuffers(vk.device, vk.cmdPool, 1, &cmds);
-        beginFrameCommandBuffer(cmds);
-
-        // NOTE(jan): Clear colour / depth.
-        VkClearValue colorClear;
-        colorClear.color = {1.f, 0.f, 1.f, 1.f};
-        VkClearValue depthClear;
-        depthClear.depthStencil = {1.f, 0};
-        VkClearValue clears[] = {colorClear, depthClear};
-
-        // NOTE(jan): Render pass.
-        VkRenderPassBeginInfo beginInfo = {};
-        beginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-        beginInfo.clearValueCount = 2;
-        beginInfo.pClearValues = clears;
-        beginInfo.framebuffer = vk.swap.framebuffers[swapImageIndex];
-        beginInfo.renderArea.extent = vk.swap.extent;
-        beginInfo.renderArea.offset = {0, 0};
-        beginInfo.renderPass = vk.renderPass;
-
-        vkCmdBeginRenderPass(cmds, &beginInfo, VK_SUBPASS_CONTENTS_INLINE);
-        vkCmdEndRenderPass(cmds);
-        endCommandBuffer(cmds);
-
-        // Present
-        VkSubmitInfo submitInfo = {};
-        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submitInfo.commandBufferCount = 1;
-        submitInfo.pCommandBuffers = &cmds;
-        submitInfo.waitSemaphoreCount = 1;
-        submitInfo.pWaitSemaphores = &vk.swap.imageReady;
-        VkPipelineStageFlags waitStages[] = {
-            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
-        };
-        submitInfo.pWaitDstStageMask = waitStages;
-        submitInfo.signalSemaphoreCount = 1;
-        submitInfo.pSignalSemaphores = &vk.swap.cmdBufferDone;
-        vkQueueSubmit(vk.queue, 1, &submitInfo, VK_NULL_HANDLE);
-        VkPresentInfoKHR presentInfo = {};
-        presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-        presentInfo.swapchainCount = 1;
-        presentInfo.pSwapchains = &vk.swap.handle;
-        presentInfo.waitSemaphoreCount = 1;
-        presentInfo.pWaitSemaphores = &vk.swap.cmdBufferDone;
-        presentInfo.pImageIndices = &swapImageIndex;
-        VKCHECK(vkQueuePresentKHR(vk.queue, &presentInfo))
-        // PERF(jan): This is potentially slow.
-        vkQueueWaitIdle(vk.queue);
+        doFrame(vk, input);
     }
 
     return 0;
