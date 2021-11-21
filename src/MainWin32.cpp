@@ -1,10 +1,14 @@
-#include "vulkan/vulkan_core.h"
 #pragma warning (disable: 4267)
 #pragma warning (disable: 4996)
 
 #include <Windows.h>
 #include <cstdio>
 #include <map>
+
+#define STB_RECT_PACK_IMPLEMENTATION
+#include "stb/stb_rect_pack.h"
+#define STB_TRUETYPE_IMPLEMENTATION
+#include "stb/stb_truetype.h"
 
 #include "Logging.h"
 #include "FileSystem.cpp"
@@ -31,8 +35,29 @@ struct Input {
     bool keyboard_keys[KEYBOARD_KEY_COUNT];
 };
 
+struct FontMetadata {
+    const char* name;
+    const char* path;
+};
+
+struct FontMetadata fontMetadata[] = {
+    {
+        .name = "default",
+        .path = "./fonts/AzeretMono-Medium.ttf",
+    },
+};
+
+struct Font {
+    FontMetadata metadata;
+    vector<u32> codepointsToLoad;
+    vector<u32> failedCodepoints;
+    vector<char> ttfFileContents;
+    map<u32, stbtt_packedchar> dataForCodepoint;
+};
+
 struct Renderer {
-    std::map<const char*, VkPipeline> pipelines;
+    map<const char*, VulkanPipeline> pipelines;
+    map<const char*, Font> fonts;
 };
 
 struct PipelineOptions pipelineOptions[] = {
@@ -50,7 +75,7 @@ struct PipelineOptions pipelineOptions[] = {
 // * FRAME: Everything required to draw a frame. *
 // ***********************************************
 
-void doFrame(Vulkan& vk, Input& input) {
+void doFrame(Vulkan& vk, Renderer& renderer, Input& input) {
     // NOTE(jan): Acquire swap image.
     uint32_t swapImageIndex = 0;
     auto result = vkAcquireNextImageKHR(
@@ -128,7 +153,16 @@ void doFrame(Vulkan& vk, Input& input) {
 // * INIT: Everything required to set up Vulkan pipelines &c. *
 // ************************************************************
 
-void init(Vulkan& vk) {
+void init(Vulkan& vk, Renderer& renderer) {
+    for (const FontMetadata& metadata: fontMetadata) {
+        INFO("Loading font '%s'...", metadata.name);
+        Font font = {
+            .metadata = metadata,
+            .ttfFileContents = readFile(metadata.path),
+        };
+        renderer.fonts.insert({ metadata.name, font });
+    }
+
     for (const PipelineOptions& options: pipelineOptions) {
         INFO("Creating pipeline '%s'...", options.name);
         VulkanPipeline pipeline = {};
@@ -251,7 +285,8 @@ WinMain(
     initVK(vk);
 
     // Load shaders, meshes, fonts, textures, and other resources.
-    init(vk);
+    Renderer renderer;
+    init(vk, renderer);
 
     // NOTE(jan): Main loop.
     bool done = false;
@@ -273,7 +308,7 @@ WinMain(
             DispatchMessage(&msg);
         } while(messageAvailable);
 
-        doFrame(vk, input);
+        doFrame(vk, renderer, input);
     }
 
     return 0;
