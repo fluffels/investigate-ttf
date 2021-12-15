@@ -6,6 +6,7 @@
 #include <Windows.h>
 #include <cstdio>
 #include <map>
+#include <set>
 
 #define STB_RECT_PACK_IMPLEMENTATION
 #include "stb/stb_rect_pack.h"
@@ -19,6 +20,7 @@
 #include <vulkan/vulkan_win32.h>
 
 using std::map;
+using std::set;
 
 const int WIDTH = 800;
 const int HEIGHT = 800;
@@ -56,21 +58,27 @@ struct Input {
 struct FontInfo {
     const char* name;
     const char* path;
+    float size;
 };
 
 struct FontInfo fontInfo[] = {
     {
         .name = "default",
         .path = "./fonts/AzeretMono-Medium.ttf",
+        .size = 1.f
     },
 };
 
 struct Font {
     FontInfo info;
-
-    vector<u32> codepointsToLoad;
-    vector<u32> failedCodepoints;
+    bool isDirty;
     vector<char> ttfFileContents;
+
+    u32 bitmapSideLength;
+    VulkanSampler sampler;
+
+    set<u32> codepointsToLoad;
+    set<u32> failedCodepoints;
     map<u32, stbtt_packedchar> dataForCodepoint;
 };
 
@@ -81,7 +89,10 @@ struct MeshInfo {
 struct Mesh {
     MeshInfo info;
 
+    umm vertexCount;
     vector<f32> vertices;
+
+    umm indexCount;
     vector<u32> indices;
 };
 
@@ -136,6 +147,7 @@ PipelineInfo pipelineInfo[] = {
         .fragmentShaderPath = "shaders/text.frag.spv",
         .clockwiseWinding = true,
         .cullBackFaces = false,
+        .depthEnabled = false,
         .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
     }
 };
@@ -159,17 +171,68 @@ struct Renderer {
     } \
     renderer.type.insert({ name, var })
 
+// ***********
+// * GLOBALS *
+// ***********
+
+Vulkan vk;
+Vec4 base03 = { .x =      0.f, .y =  43/255.f, .z =  54/255.f, .w = 1.f };
+Vec4 base01 = { .x = 88/255.f, .y = 110/255.f, .z = 117/255.f, .w = 1.f };
+Vec4 white =  { .x =      1.f, .y =       1.f, .z =       1.f, .w = 1.f };
+
+// **************************
+// * FONT: Font management. *
+// **************************
+
+void
+packFont(Font& font) {
+    INFO("Packing %llu codepoints", font.codepointsToLoad.size());
+
+    font.bitmapSideLength = 512;
+    umm bitmapSize = font.bitmapSideLength * font.bitmapSideLength;
+    u8* bitmap = new u8[font.bitmapSideLength * font.bitmapSideLength];
+
+    stbtt_pack_context ctxt = {};
+    stbtt_PackBegin(&ctxt, bitmap, font.bitmapSideLength, font.bitmapSideLength, 0, 1, NULL);
+
+    for (u32 codepoint: font.codepointsToLoad) {
+        if (font.failedCodepoints.contains(codepoint)) continue;
+
+        stbtt_packedchar cdata;
+        int result = stbtt_PackFontRange(
+            &ctxt,
+            (u8*)font.ttfFileContents.data(), 0,
+            font.info.size,
+            codepoint, 1,
+            &cdata
+        );
+        if (!result) {
+            INFO("Could not load codepoint %u", codepoint);
+            font.failedCodepoints.insert(codepoint);
+        } else {
+            font.dataForCodepoint[codepoint] = cdata;
+        }
+    }
+
+    stbtt_PackEnd(&ctxt);
+
+    if (font.sampler.handle != VK_NULL_HANDLE) {
+        // TODO(jan): Free sampler.
+    }
+
+    uploadTexture(vk, font.bitmapSideLength, font.bitmapSideLength, VK_FORMAT_R8_UNORM, bitmap, bitmapSize, font.sampler);
+    delete[] bitmap;
+
+    font.isDirty = false;
+}
+
 // ***********************************************
 // * FRAME: Everything required to draw a frame. *
 // ***********************************************
 
-void pushAABox(Mesh& mesh, AABox& box) {
-    AABox tex = {
-        .x0 = 0,
-        .x1 = 1,
-        .y0 = 0,
-        .y1 = 1
-    };
+void
+pushAABox(Mesh& mesh, AABox& box, AABox& tex, Vec4& color) {
+    umm baseIndex = mesh.vertexCount;
 
     // NOTE(jan): Assuming that x grows rightward, and y grows downward.
     //            Number vertices of box clockwise starting at the top
@@ -182,31 +245,94 @@ void pushAABox(Mesh& mesh, AABox& box) {
     mesh.vertices.push_back(box.y0);
     mesh.vertices.push_back(tex.x0);
     mesh.vertices.push_back(tex.y0);
+    mesh.vertices.push_back(color.x);
+    mesh.vertices.push_back(color.y);
+    mesh.vertices.push_back(color.z);
+    mesh.vertices.push_back(color.w);
+    mesh.vertexCount++;
     // NOTE(jan): Top-right, v1.
     mesh.vertices.push_back(box.x1);
     mesh.vertices.push_back(box.y0);
-    mesh.vertices.push_back(tex.x0);
+    mesh.vertices.push_back(tex.x1);
     mesh.vertices.push_back(tex.y0);
+    mesh.vertices.push_back(color.x);
+    mesh.vertices.push_back(color.y);
+    mesh.vertices.push_back(color.z);
+    mesh.vertices.push_back(color.w);
+    mesh.vertexCount++;
     // NOTE(jan): Bottom-right, v2.
     mesh.vertices.push_back(box.x1);
     mesh.vertices.push_back(box.y1);
-    mesh.vertices.push_back(tex.x0);
-    mesh.vertices.push_back(tex.y0);
+    mesh.vertices.push_back(tex.x1);
+    mesh.vertices.push_back(tex.y1);
+    mesh.vertices.push_back(color.x);
+    mesh.vertices.push_back(color.y);
+    mesh.vertices.push_back(color.z);
+    mesh.vertices.push_back(color.w);
+    mesh.vertexCount++;
     // NOTE(jan): Bottom-left, v3.
     mesh.vertices.push_back(box.x0);
     mesh.vertices.push_back(box.y1);
     mesh.vertices.push_back(tex.x0);
-    mesh.vertices.push_back(tex.y0);
+    mesh.vertices.push_back(tex.y1);
+    mesh.vertices.push_back(color.x);
+    mesh.vertices.push_back(color.y);
+    mesh.vertices.push_back(color.z);
+    mesh.vertices.push_back(color.w);
+    mesh.vertexCount++;
 
     // NOTE(jan): Top-right triangle.
-    mesh.indices.push_back(0);
-    mesh.indices.push_back(1);
-    mesh.indices.push_back(2);
+    mesh.indices.push_back(baseIndex + 0);
+    mesh.indices.push_back(baseIndex + 1);
+    mesh.indices.push_back(baseIndex + 2);
+    mesh.indexCount += 3;
 
     // NOTE(jan): Bottom-left triangle.
-    mesh.indices.push_back(0);
-    mesh.indices.push_back(2);
-    mesh.indices.push_back(3);
+    mesh.indices.push_back(baseIndex + 0);
+    mesh.indices.push_back(baseIndex + 2);
+    mesh.indices.push_back(baseIndex + 3);
+    mesh.indexCount += 3;
+}
+
+void pushAABox(Mesh& mesh, AABox& box, Vec4& color) {
+    AABox tex = {
+        .x0 = 0,
+        .x1 = 1,
+        .y0 = 0,
+        .y1 = 1
+    };
+
+    pushAABox(mesh, box, tex, color);
+}
+
+void pushGlyph(Mesh& mesh, Font& font, AABox& box, u32 codepoint, Vec4 color) {
+    if (!font.dataForCodepoint.contains(codepoint)) {
+        if (!font.failedCodepoints.contains(codepoint)) {
+            font.codepointsToLoad.insert(codepoint);
+            font.isDirty = true;
+        }
+        return;
+    }
+    stbtt_packedchar cdata = font.dataForCodepoint[codepoint];
+
+    stbtt_aligned_quad quad;
+    f32 x = box.x0;
+    f32 y = box.y1;
+    stbtt_GetPackedQuad(&cdata, font.bitmapSideLength, font.bitmapSideLength, 0, &x, &y, &quad, 0);
+
+    box.x0 = quad.x0;
+    box.x1 = quad.x1;
+    box.y0 = quad.y0;
+    box.y1 = quad.y1;
+
+    AABox tex = {
+        .x0 = quad.s0,
+        .x1 = quad.s1,
+        .y0 = quad.t0,
+        .y1 = quad.t1
+    };
+
+    pushAABox(mesh, box, tex, color);
 }
 
 void doFrame(Vulkan& vk, Renderer& renderer, Input& input) {
@@ -230,19 +356,31 @@ void doFrame(Vulkan& vk, Renderer& renderer, Input& input) {
 
     for (auto& pair: renderer.meshes) {
         Mesh& mesh = pair.second;
+        mesh.indexCount = 0;
         mesh.indices.clear();
+        mesh.vertexCount = 0;
         mesh.vertices.clear();
     }
 
     RENDERER_GET(text, meshes, "text");
+    RENDERER_GET(font, fonts, "default");
+
+    AABox backgroundBox = {
+        .x0 = -1.f,
+        .x1 =  1.f,
+        .y0 = -1.f,
+        .y1 =  1.f
+    };
+    // TODO(jan): Dedicated mesh.
+    pushAABox(text, backgroundBox, base03);
 
     AABox testBox = {
-        .x0 = -0.5f,
-        .x1 =  0.5f,
-        .y0 = -0.5f,
-        .y1 =  0.5f,
+        .x0 = 0.f,
+        .x1 = 0.f,
+        .y0 = 0.f,
+        .y1 = 0.f,
     };
-    pushAABox(text, testBox);
+    pushGlyph(text, font, testBox, 'A', base01);
 
     // NOTE(jan): Start recording commands.
     VkCommandBuffer cmds = {};
@@ -325,6 +463,9 @@ void doFrame(Vulkan& vk, Renderer& renderer, Input& input) {
 
     // PERF(jan): This is potentially slow.
     vkQueueWaitIdle(vk.queue);
+
+    // Cleanup.
+    if (font.isDirty) packFont(font);
 }
 
 // ************************************************************
@@ -456,7 +597,6 @@ WinMain(
     ShowCursor(FALSE);
 
     // NOTE(jan): Create Vulkan instance..
-    Vulkan vk;
     vk.extensions.emplace_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
     createVKInstance(vk);
 
