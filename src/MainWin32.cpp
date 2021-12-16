@@ -65,7 +65,7 @@ struct FontInfo fontInfo[] = {
     {
         .name = "default",
         .path = "./fonts/AzeretMono-Medium.ttf",
-        .size = 1.f
+        .size = 20.f
     },
 };
 
@@ -418,6 +418,11 @@ void doFrame(Vulkan& vk, Renderer& renderer, Input& input) {
             0, 1, &pipeline.descriptorSet,
             0, nullptr
         );
+        if (font.sampler.handle != VK_NULL_HANDLE) {
+            updateCombinedImageSampler(
+                vk.device, pipeline.descriptorSet, 1, &font.sampler, 1
+            );
+        }
 
         RENDERER_GET(mesh, meshes, brush.info.meshName);
         VulkanMesh vkMesh = {};
