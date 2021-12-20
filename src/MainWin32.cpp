@@ -114,6 +114,36 @@ struct UniformInfo {
     const char* resourceName;
 };
 
+MeshInfo meshInfo[] = {
+    {
+        .name = "boxes",
+    },
+    {
+        .name = "text",
+    },
+};
+
+PipelineInfo pipelineInfo[] = {
+    {
+        .name = "text",
+        .vertexShaderPath = "shaders/ortho_xy_uv_rgba.vert.spv",
+        .fragmentShaderPath = "shaders/text.frag.spv",
+        .clockwiseWinding = true,
+        .cullBackFaces = false,
+        .depthEnabled = false,
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
+    },
+    {
+        .name = "boxes",
+        .vertexShaderPath = "shaders/ortho_xy_uv_rgba.vert.spv",
+        .fragmentShaderPath = "shaders/boxes.frag.spv",
+        .clockwiseWinding = true,
+        .cullBackFaces = false,
+        .depthEnabled = false,
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
+    }
+};
+
 struct BrushInfo {
     const char* name;
     const char* meshName;
@@ -123,12 +153,6 @@ struct BrushInfo {
 
 struct Brush {
     BrushInfo info;
-};
-
-MeshInfo meshInfo[] = {
-    {
-        .name = "text",
-    },
 };
 
 BrushInfo brushInfo[] = {
@@ -144,17 +168,10 @@ BrushInfo brushInfo[] = {
             },
         },
     },
-};
-
-PipelineInfo pipelineInfo[] = {
     {
-        .name = "text",
-        .vertexShaderPath = "shaders/text.vert.spv",
-        .fragmentShaderPath = "shaders/text.frag.spv",
-        .clockwiseWinding = true,
-        .cullBackFaces = false,
-        .depthEnabled = false,
-        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
+        .name = "boxes",
+        .meshName = "boxes",
+        .pipelineName = "boxes"
     }
 };
 
@@ -381,6 +398,7 @@ void doFrame(Vulkan& vk, Renderer& renderer, Input& input) {
         mesh.vertices.clear();
     }
 
+    RENDERER_GET(boxes, meshes, "boxes");
     RENDERER_GET(text, meshes, "text");
     RENDERER_GET(font, fonts, "default");
 
@@ -390,8 +408,7 @@ void doFrame(Vulkan& vk, Renderer& renderer, Input& input) {
         .y0 = 0.f,
         .y1 = windowHeight / 2.f
     };
-    // TODO(jan): Dedicated mesh.
-    pushAABox(text, backgroundBox, base03);
+    pushAABox(boxes, backgroundBox, base03);
 
     AABox testBox = {
         .x0 = windowWidth / 2.f,
@@ -443,6 +460,8 @@ void doFrame(Vulkan& vk, Renderer& renderer, Input& input) {
         updateUniformBuffer(vk.device, pipeline.descriptorSet, 0, vk.uniforms.handle);
 
         RENDERER_GET(mesh, meshes, brush.info.meshName);
+        if ((mesh.indexCount == 0) || (mesh.vertexCount == 0)) continue;
+
         VulkanMesh vkMesh = {};
         uploadMesh(
             vk,
