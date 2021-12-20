@@ -1,5 +1,4 @@
 #include "Vulkan.h"
-#include "vulkan/vulkan_core.h"
 #pragma warning (disable: 4267)
 #pragma warning (disable: 4996)
 
@@ -13,8 +12,8 @@
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "stb/stb_truetype.h"
 
-#include "MathLib.h"
 #include "Logging.h"
+#include "MathLib.cpp"
 #include "FileSystem.cpp"
 #include "Vulkan.cpp"
 #include <vulkan/vulkan_win32.h>
@@ -50,6 +49,13 @@ struct AABox {
 // ******************************************************************************************
 // * RESOURCE: Definitions for rendering resources (meshes, fonts, textures, pipelines &c). *
 // ******************************************************************************************
+
+struct Uniforms {
+    float proj[16];
+    float ortho[16];
+    Vec4 eye;
+    Vec4 rotation;
+};
 
 struct Input {
     bool keyboard_keys[KEYBOARD_KEY_COUNT];
@@ -174,6 +180,10 @@ struct Renderer {
 // ***********
 // * GLOBALS *
 // ***********
+
+RECT windowRect;
+f32 windowWidth;
+f32 windowHeight;
 
 Vulkan vk;
 Vec4 base03 = { .x =      0.f, .y =  43/255.f, .z =  54/255.f, .w = 1.f };
@@ -354,6 +364,15 @@ void doFrame(Vulkan& vk, Renderer& renderer, Input& input) {
         FATAL("could not acquire next image")
     }
 
+    // NOTE(jan): Calculate uniforms (projection matrix &c).
+    Uniforms uniforms;
+
+    matrixInit(uniforms.ortho);
+    matrixOrtho(windowWidth, windowHeight, uniforms.ortho);
+
+    updateUniforms(vk, &uniforms, sizeof(Uniforms));
+
+    // NOTE(jan): Meshes are cleared and recalculated each frame.
     for (auto& pair: renderer.meshes) {
         Mesh& mesh = pair.second;
         mesh.indexCount = 0;
@@ -366,19 +385,17 @@ void doFrame(Vulkan& vk, Renderer& renderer, Input& input) {
     RENDERER_GET(font, fonts, "default");
 
     AABox backgroundBox = {
-        .x0 = -1.f,
-        .x1 =  1.f,
-        .y0 = -1.f,
-        .y1 =  1.f
+        .x0 = 0.f,
+        .x1 = windowWidth,
+        .y0 = 0.f,
+        .y1 = windowHeight / 2.f
     };
     // TODO(jan): Dedicated mesh.
     pushAABox(text, backgroundBox, base03);
 
     AABox testBox = {
-        .x0 = 0.f,
-        .x1 = 0.f,
-        .y0 = 0.f,
-        .y1 = 0.f,
+        .x0 = windowWidth / 2.f,
+        .y1 = windowHeight / 2.f,
     };
     pushGlyph(text, font, testBox, 'A', base01);
 
@@ -423,6 +440,7 @@ void doFrame(Vulkan& vk, Renderer& renderer, Input& input) {
                 vk.device, pipeline.descriptorSet, 1, &font.sampler, 1
             );
         }
+        updateUniformBuffer(vk.device, pipeline.descriptorSet, 0, vk.uniforms.handle);
 
         RENDERER_GET(mesh, meshes, brush.info.meshName);
         VulkanMesh vkMesh = {};
@@ -600,6 +618,11 @@ WinMain(
         SWP_FRAMECHANGED
     );
     ShowCursor(FALSE);
+
+    // TODO(jan): Handle resize.
+    GetWindowRect(window, &windowRect);
+    windowWidth = windowRect.right - windowRect.left;
+    windowHeight = windowRect.bottom - windowRect.top;
 
     // NOTE(jan): Create Vulkan instance..
     vk.extensions.emplace_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
