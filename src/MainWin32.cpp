@@ -415,7 +415,7 @@ void pushText(Mesh& mesh, Font& font, AABox& box, String text, Vec4 color) {
 
     umm stringIndex = 0;
 
-    while (true) {
+    while (stringIndex < text.length) {
         char c = text.data[stringIndex];
 
         // TODO(jan): Better detection of new-lines (unicode).
@@ -433,7 +433,8 @@ void pushText(Mesh& mesh, Font& font, AABox& box, String text, Vec4 color) {
                 font.codepointsToLoad.insert(codepoint);
                 font.isDirty = true;
             }
-            return;
+            stringIndex++;
+            continue;
         }
         stbtt_packedchar cdata = font.dataForCodepoint[codepoint];
 
@@ -457,7 +458,6 @@ void pushText(Mesh& mesh, Font& font, AABox& box, String text, Vec4 color) {
         pushAABox(mesh, charBox, tex, color);
 
         stringIndex++;
-        if (stringIndex > text.length) break;
     }
 }
 
