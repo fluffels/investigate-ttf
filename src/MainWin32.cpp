@@ -417,6 +417,14 @@ void pushText(Mesh& mesh, Font& font, AABox& box, String text, Vec4 color) {
 
     while (true) {
         char c = text.data[stringIndex];
+
+        // TODO(jan): Better detection of new-lines (unicode).
+        if (c == '\n') {
+            x = box.x0;
+            y += font.info.size;
+            stringIndex++;
+            continue;
+        }
         // TODO(jan): UTF-8 decoding.
         u32 codepoint = (u32)c;
 
@@ -432,10 +440,12 @@ void pushText(Mesh& mesh, Font& font, AABox& box, String text, Vec4 color) {
         stbtt_aligned_quad quad;
         stbtt_GetPackedQuad(&cdata, font.bitmapSideLength, font.bitmapSideLength, 0, &x, &y, &quad, 0);
 
-        box.x0 = quad.x0;
-        box.x1 = quad.x1;
-        box.y0 = quad.y0;
-        box.y1 = quad.y1;
+        AABox charBox = {
+            .x0 = quad.x0,
+            .x1 = quad.x1,
+            .y0 = quad.y0,
+            .y1 = quad.y1
+        };
 
         AABox tex = {
             .x0 = quad.s0,
@@ -444,7 +454,7 @@ void pushText(Mesh& mesh, Font& font, AABox& box, String text, Vec4 color) {
             .y1 = quad.t1
         };
 
-        pushAABox(mesh, box, tex, color);
+        pushAABox(mesh, charBox, tex, color);
 
         stringIndex++;
         if (stringIndex > text.length) break;
