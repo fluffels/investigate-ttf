@@ -13,6 +13,8 @@
 #include "stb/stb_truetype.h"
 
 #include "Logging.h"
+#include "Memory.cpp"
+#include "String.cpp"
 #include "MathLib.cpp"
 #include "FileSystem.cpp"
 #include "Vulkan.cpp"
@@ -44,6 +46,17 @@ struct AABox {
     f32 x1;
     f32 y0;
     f32 y1;
+};
+
+// ******************************************
+// * DATA: Definitions for data structures. *
+// ******************************************
+
+struct Console {
+    void* data;
+    umm top;
+    umm bottom;
+    umm size;
 };
 
 // ******************************************************************************************
@@ -197,6 +210,10 @@ struct Renderer {
 // ***********
 // * GLOBALS *
 // ***********
+
+MemoryArena globalArena;
+
+Console console;
 
 RECT windowRect;
 f32 windowWidth;
@@ -560,6 +577,58 @@ void init(Vulkan& vk, Renderer& renderer) {
 
 Input input;
 
+// Derived from https://github.com/cmuratori/refterm/blob/main/refterm_example_source_buffer.c
+Console allocateConsole(size_t bufferSize) {
+    Console result = {};
+
+    SYSTEM_INFO info;
+    GetSystemInfo(&info);
+    if (!isPowerOfTwo(info.dwAllocationGranularity)) {
+        FATAL("system allocation size is not a power of two");
+    }
+
+    bufferSize = ((bufferSize / info.dwAllocationGranularity) + 1) * info.dwAllocationGranularity;
+    if (bufferSize % info.dwAllocationGranularity != 0) {
+        FATAL("invalid buffer size");
+    }
+
+    HANDLE section = CreateFileMapping(
+        INVALID_HANDLE_VALUE,
+        NULL,
+        PAGE_READWRITE,
+        (DWORD)(bufferSize >> 32),
+        (DWORD)(bufferSize & 0xffffffff),
+        NULL
+    );
+
+    void* ringBuffer = nullptr;
+    // NOTE(jan): Try to find two consecutive memory areas to map the section twice back-to-back.
+    for(size_t offset =   0x40000000;
+               offset <  0x400000000;
+               offset +=   0x1000000) {
+        void *view1 = (char *)MapViewOfFileEx(section, FILE_MAP_ALL_ACCESS, 0, 0, bufferSize, (void *)offset);
+        void *view2 = MapViewOfFileEx(section, FILE_MAP_ALL_ACCESS, 0, 0, bufferSize, ((char *)view1 + bufferSize));
+
+        if(view1 && view2) {
+            ringBuffer = view1;
+            break;
+        }
+
+        if(view1) UnmapViewOfFile(view1);
+        if(view2) UnmapViewOfFile(view2);
+    }
+
+    if (!ringBuffer) {
+        FATAL("could not allocate ringbuffer");
+    }
+
+    result.data = ringBuffer;
+    result.size = bufferSize;
+    result.top = 0;
+    result.bottom = 0;
+    return result;
+}
+
 LRESULT __stdcall
 WindowProc(
     HWND    window,
@@ -598,6 +667,8 @@ WinMain(
 ) {
     initLogging();
     INFO("Logging initialized.")
+
+    console = allocateConsole(1 * 1024 * 1024);
 
     // Create Window.
     WNDCLASSEX windowClassProperties = {};
