@@ -1,4 +1,5 @@
 #include "Vulkan.h"
+#include <stdio.h>
 #pragma warning (disable: 4267)
 #pragma warning (disable: 4996)
 
@@ -12,7 +13,79 @@
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "stb/stb_truetype.h"
 
-#include "Logging.h"
+#include "Types.h"
+
+// ***********
+// * LOGGING *
+// ***********
+
+struct Console {
+    void* data;
+    umm top;
+    umm bottom;
+    umm size;
+};
+
+Console console;
+LARGE_INTEGER counterEpoch;
+LARGE_INTEGER counterFrequency;
+static FILE* logFile;
+
+float getElapsed() {
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    auto result =
+        (t.QuadPart - counterEpoch.QuadPart)
+        / (float)counterFrequency.QuadPart;
+    return result;
+}
+
+void log(const char* level, const char* fileName, int lineNumber, const char* fmt, ...) {
+    char* consoleEnd = (char*)console.data + console.bottom;
+
+    const char* prefixFmt = "[%s] [%f] [%s:%d] ";
+
+    fprintf(logFile, prefixFmt, level, getElapsed(), fileName, lineNumber);
+    int written = sprintf(consoleEnd, prefixFmt, level, getElapsed(), fileName, lineNumber);
+    console.bottom = (console.bottom + written) % console.size;
+    consoleEnd = (char*)console.data + console.bottom;
+
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(logFile, fmt, args);
+    written = vsnprintf(consoleEnd, console.size, fmt, args);
+    console.bottom = (console.bottom + written) % console.size;
+    consoleEnd = (char*)console.data + console.bottom;
+    va_end(args);
+
+    fprintf(logFile, "\n");
+    written = sprintf(consoleEnd, "\n");
+    console.bottom = (console.bottom + written) % console.size;
+    fflush(logFile);
+}
+
+#define LOG(level, fmt, ...) log(level, __FILE__, __LINE__, fmt, __VA_ARGS__)
+#define FATAL(fmt, ...) {\
+    LOG("FATAL", fmt, __VA_ARGS__);\
+    fclose(logFile);\
+    exit(1);\
+}
+#define INFO(fmt, ...) LOG("INFO", fmt, __VA_ARGS__)
+#define WARN(fmt, ...) LOG("WARN", fmt, __VA_ARGS__)
+#define ERR(fmt, ...) LOG("ERR", fmt, __VA_ARGS__)
+
+#define CHECK(x, fmt, ...) if (!x) { FATAL(fmt, __VA_ARGS__) }
+#define LERROR(x) \
+    if (x) {      \
+        char buffer[1024]; \
+        strerror_s(buffer, x); \
+        FATAL("%s", buffer); \
+    }
+
+// ***************
+// * END LOGGING *
+// ***************
+
 #include "Memory.cpp"
 #include "String.cpp"
 #include "MathLib.cpp"
@@ -46,17 +119,6 @@ struct AABox {
     f32 x1;
     f32 y0;
     f32 y1;
-};
-
-// ******************************************
-// * DATA: Definitions for data structures. *
-// ******************************************
-
-struct Console {
-    void* data;
-    umm top;
-    umm bottom;
-    umm size;
 };
 
 // ******************************************************************************************
@@ -212,8 +274,6 @@ struct Renderer {
 // ***********
 
 MemoryArena globalArena;
-
-Console console;
 
 RECT windowRect;
 f32 windowWidth;
@@ -606,8 +666,8 @@ Console allocateConsole(size_t bufferSize) {
     for(size_t offset =   0x40000000;
                offset <  0x400000000;
                offset +=   0x1000000) {
-        void *view1 = (char *)MapViewOfFileEx(section, FILE_MAP_ALL_ACCESS, 0, 0, bufferSize, (void *)offset);
-        void *view2 = MapViewOfFileEx(section, FILE_MAP_ALL_ACCESS, 0, 0, bufferSize, ((char *)view1 + bufferSize));
+        void *view1 = MapViewOfFileEx(section, FILE_MAP_ALL_ACCESS, 0, 0, bufferSize, (void *)offset);
+        void *view2 = MapViewOfFileEx(section, FILE_MAP_ALL_ACCESS, 0, 0, bufferSize, byteOffset(offset, bufferSize));
 
         if(view1 && view2) {
             ringBuffer = view1;
@@ -665,10 +725,13 @@ WinMain(
     LPSTR commandLine,
     int showCommand
 ) {
-    initLogging();
-    INFO("Logging initialized.")
-
+    auto error = fopen_s(&logFile, "LOG", "w");
+    if (error) exit(-1);
     console = allocateConsole(1 * 1024 * 1024);
+
+    QueryPerformanceCounter(&counterEpoch);
+    QueryPerformanceFrequency(&counterFrequency);
+    INFO("Logging initialized.");
 
     // Create Window.
     WNDCLASSEX windowClassProperties = {};
