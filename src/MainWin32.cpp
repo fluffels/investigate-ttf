@@ -409,34 +409,46 @@ void pushAABox(Mesh& mesh, AABox& box, Vec4& color) {
     pushAABox(mesh, box, tex, color);
 }
 
-void pushGlyph(Mesh& mesh, Font& font, AABox& box, u32 codepoint, Vec4 color) {
-    if (!font.dataForCodepoint.contains(codepoint)) {
-        if (!font.failedCodepoints.contains(codepoint)) {
-            font.codepointsToLoad.insert(codepoint);
-            font.isDirty = true;
-        }
-        return;
-    }
-    stbtt_packedchar cdata = font.dataForCodepoint[codepoint];
-
-    stbtt_aligned_quad quad;
+void pushText(Mesh& mesh, Font& font, AABox& box, String text, Vec4 color) {
     f32 x = box.x0;
     f32 y = box.y1;
-    stbtt_GetPackedQuad(&cdata, font.bitmapSideLength, font.bitmapSideLength, 0, &x, &y, &quad, 0);
 
-    box.x0 = quad.x0;
-    box.x1 = quad.x1;
-    box.y0 = quad.y0;
-    box.y1 = quad.y1;
+    umm stringIndex = 0;
 
-    AABox tex = {
-        .x0 = quad.s0,
-        .x1 = quad.s1,
-        .y0 = quad.t0,
-        .y1 = quad.t1
-    };
+    while (true) {
+        char c = text.data[stringIndex];
+        // TODO(jan): UTF-8 decoding.
+        u32 codepoint = (u32)c;
 
-    pushAABox(mesh, box, tex, color);
+        if (!font.dataForCodepoint.contains(codepoint)) {
+            if (!font.failedCodepoints.contains(codepoint)) {
+                font.codepointsToLoad.insert(codepoint);
+                font.isDirty = true;
+            }
+            return;
+        }
+        stbtt_packedchar cdata = font.dataForCodepoint[codepoint];
+
+        stbtt_aligned_quad quad;
+        stbtt_GetPackedQuad(&cdata, font.bitmapSideLength, font.bitmapSideLength, 0, &x, &y, &quad, 0);
+
+        box.x0 = quad.x0;
+        box.x1 = quad.x1;
+        box.y0 = quad.y0;
+        box.y1 = quad.y1;
+
+        AABox tex = {
+            .x0 = quad.s0,
+            .x1 = quad.s1,
+            .y0 = quad.t0,
+            .y1 = quad.t1
+        };
+
+        pushAABox(mesh, box, tex, color);
+
+        stringIndex++;
+        if (stringIndex > text.length) break;
+    }
 }
 
 void doFrame(Vulkan& vk, Renderer& renderer, Input& input) {
@@ -487,11 +499,17 @@ void doFrame(Vulkan& vk, Renderer& renderer, Input& input) {
     };
     pushAABox(boxes, backgroundBox, base03);
 
-    AABox testBox = {
-        .x0 = windowWidth / 2.f,
-        .y1 = windowHeight / 2.f,
+    AABox consoleBox = {
+        .x0 = font.info.size / 2.f,
+        .y1 = font.info.size,
     };
-    pushGlyph(text, font, testBox, 'A', base01);
+    struct String consoleText = {
+        .size = console.size,
+        // TODO(jan): This is wrong
+        .length = console.bottom - console.top,
+        .data = (char*)console.data + console.top,
+    };
+    pushText(text, font, consoleBox, consoleText, base01);
 
     // NOTE(jan): Start recording commands.
     VkCommandBuffer cmds = {};
