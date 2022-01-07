@@ -563,7 +563,7 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
     const f32 console_height = backgroundBox.y1 - backgroundBox.y0 - margin;
     const u32 console_line_height = console_height / font.info.size;
 
-    if (input.console_page_up && (console.lines.viewOffset < console.lines.count - 1)) console.lines.viewOffset++;
+    if (input.console_page_up && (console.lines.viewOffset < console.lines.count - console_line_height)) console.lines.viewOffset++;
     if (input.console_page_down && (console.lines.viewOffset > 0)) console.lines.viewOffset--;
 
     AABox consoleLineBox = {
