@@ -147,6 +147,15 @@ struct AABox {
     f32 y1;
 };
 
+// ******
+// * UI *
+// ******
+
+struct Input {
+    bool console_page_down;
+    bool console_page_up;
+};
+
 // ******************************************************************************************
 // * RESOURCE: Definitions for rendering resources (meshes, fonts, textures, pipelines &c). *
 // ******************************************************************************************
@@ -296,6 +305,8 @@ struct Renderer {
 // ***********
 
 MemoryArena globalArena;
+
+Input input;
 
 RECT windowRect;
 f32 windowWidth;
@@ -534,6 +545,12 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
 
     // NOTE(jan): Building mesh for console prompt.
     const f32 margin = font.info.size / 2.f;
+    const f32 console_height = backgroundBox.y1 - backgroundBox.y0 - margin;
+    const u32 console_line_height = console_height / font.info.size;
+
+    if (input.console_page_up && (console.lines.viewOffset < console.lines.count - 1)) console.lines.viewOffset++;
+    if (input.console_page_down && (console.lines.viewOffset > 0)) console.lines.viewOffset--;
+
     AABox consoleLineBox = {
         .x0 = margin,
         .y1 = backgroundBox.y1 - margin,
@@ -547,7 +564,6 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
         ConsoleLine line = console.lines.data[lineIndex];
         String consoleText = {
             .size = line.size,
-            // TODO(jan): This is wrong
             .length = line.size,
             .data = (char*)console.data + line.start,
         };
@@ -769,19 +785,16 @@ WindowProc(
         case WM_KEYDOWN:
             switch (wParam) {
                 case VK_ESCAPE: PostQuitMessage(0); break;
-                // TODO(jan): Key mapping.
-                // NOTE(jan): This is Page Up
-                case VK_PRIOR: 
-                    if (console.lines.viewOffset < console.lines.count - 1) console.lines.viewOffset++;
-                    break;
-                // NOTE(jan): This is Page Down
-                case VK_NEXT:
-                    if (console.lines.viewOffset > 0) console.lines.viewOffset--;
-                    break;
+                case VK_PRIOR: input.console_page_up = true; break;
+                case VK_NEXT: input.console_page_down = true; break;
             }
             if (wParam == VK_ESCAPE) PostQuitMessage(0);
             break;
         default:
+            switch (wParam) {
+                case VK_PRIOR: input.console_page_up = false; break;
+                case VK_NEXT: input.console_page_down = false; break;
+            }
             break;
     }
     return DefWindowProc(window, message, wParam, lParam);
