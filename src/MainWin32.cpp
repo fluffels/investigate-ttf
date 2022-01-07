@@ -41,6 +41,7 @@ struct Console {
     umm bottom;
     umm size;
     LineBuffer lines;
+    bool show;
 };
 
 void
@@ -158,6 +159,7 @@ struct AABox {
 struct Input {
     bool console_page_down;
     bool console_page_up;
+    bool console_toggle;
 };
 
 // ******************************************************************************************
@@ -568,63 +570,70 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
     RENDERER_GET(text, meshes, "text");
     RENDERER_GET(font, fonts, "default");
 
-    // NOTE(jan): Building mesh for console.
-    AABox backgroundBox = {
-        .x0 = 0.f,
-        .x1 = windowWidth,
-        .y0 = 0.f,
-        .y1 = windowHeight / 2.f
-    };
-    pushAABox(boxes, backgroundBox, base03);
+    if (input.console_toggle) {
+        console.show = !console.show;
+        input.console_toggle = false;
+    }
 
-    // NOTE(jan): Building mesh for console prompt.
-    const f32 margin = font.info.size / 2.f;
-    const f32 console_height = backgroundBox.y1 - backgroundBox.y0 - margin;
-    const u32 console_line_height = console_height / font.info.size;
-
-    if (input.console_page_up && (console.lines.viewOffset < console.lines.count - console_line_height)) console.lines.viewOffset++;
-    if (input.console_page_down && (console.lines.viewOffset > 0)) console.lines.viewOffset--;
-
-    AABox consoleLineBox = {
-        .x0 = margin,
-        .x1 = backgroundBox.x1,
-        .y1 = backgroundBox.y1 - margin,
-    };
-    AABox promptBox = pushText(text, font, consoleLineBox, stringLiteral("> "), base01);
-
-    f32 cursorAlpha = (1 + sin(frameStart * 10.f)) / 2.f;
-    AABox cursorBox = {};
-    cursorBox.x0 = promptBox.x1;
-    cursorBox.x1 = backgroundBox.x1;
-    cursorBox.y1 = promptBox.y1;
-    Vec4 cursorColor = {
-        .x = base01.x,
-        .y = base01.y,
-        .z = base01.z,
-        .w = cursorAlpha
-    };
-    cursorBox = pushText(text, font, cursorBox, stringLiteral("_"), cursorColor);
-
-    consoleLineBox.y1 = cursorBox.y0;
-
-    // NOTE(jan): Building mesh for console scrollback.
-    // for (umm lineIndex = console.lines.next - 1 - console.lines.viewOffset; lineIndex > console.lines.first; lineIndex--) {
-    umm lineIndex = console.lines.next > 0 ? console.lines.next - 1 : console.lines.count - 1;
-    for (umm i = 0; i < console.lines.count; i++) {
-        if (consoleLineBox.y1 < 0) break;
-        ConsoleLine line = console.lines.data[lineIndex];
-        String consoleText = {
-            .size = line.size,
-            .length = line.size,
-            .data = (char*)console.data + line.start,
+    if (console.show) {
+        // NOTE(jan): Building mesh for console.
+        AABox backgroundBox = {
+            .x0 = 0.f,
+            .x1 = windowWidth,
+            .y0 = 0.f,
+            .y1 = windowHeight / 2.f
         };
-        AABox prevLineBox = pushText(text, font, consoleLineBox, consoleText, base01);
-        consoleLineBox.y1 = prevLineBox.y0;
+        pushAABox(boxes, backgroundBox, base03);
 
-        if (lineIndex > 0) {
-            lineIndex--;
-        } else {
-            lineIndex = console.lines.count - 1;
+        // NOTE(jan): Building mesh for console prompt.
+        const f32 margin = font.info.size / 2.f;
+        const f32 console_height = backgroundBox.y1 - backgroundBox.y0 - margin;
+        const u32 console_line_height = console_height / font.info.size;
+
+        if (input.console_page_up && (console.lines.viewOffset < console.lines.count - console_line_height)) console.lines.viewOffset++;
+        if (input.console_page_down && (console.lines.viewOffset > 0)) console.lines.viewOffset--;
+
+        AABox consoleLineBox = {
+            .x0 = margin,
+            .x1 = backgroundBox.x1,
+            .y1 = backgroundBox.y1 - margin,
+        };
+        AABox promptBox = pushText(text, font, consoleLineBox, stringLiteral("> "), base01);
+
+        f32 cursorAlpha = (1 + sin(frameStart * 10.f)) / 2.f;
+        AABox cursorBox = {};
+        cursorBox.x0 = promptBox.x1;
+        cursorBox.x1 = backgroundBox.x1;
+        cursorBox.y1 = promptBox.y1;
+        Vec4 cursorColor = {
+            .x = base01.x,
+            .y = base01.y,
+            .z = base01.z,
+            .w = cursorAlpha
+        };
+        cursorBox = pushText(text, font, cursorBox, stringLiteral("_"), cursorColor);
+
+        consoleLineBox.y1 = cursorBox.y0;
+
+        // NOTE(jan): Building mesh for console scrollback.
+        // for (umm lineIndex = console.lines.next - 1 - console.lines.viewOffset; lineIndex > console.lines.first; lineIndex--) {
+        umm lineIndex = console.lines.next > 0 ? console.lines.next - 1 : console.lines.count - 1;
+        for (umm i = 0; i < console.lines.count; i++) {
+            if (consoleLineBox.y1 < 0) break;
+            ConsoleLine line = console.lines.data[lineIndex];
+            String consoleText = {
+                .size = line.size,
+                .length = line.size,
+                .data = (char*)console.data + line.start,
+            };
+            AABox prevLineBox = pushText(text, font, consoleLineBox, consoleText, base01);
+            consoleLineBox.y1 = prevLineBox.y0;
+
+            if (lineIndex > 0) {
+                lineIndex--;
+            } else {
+                lineIndex = console.lines.count - 1;
+            }
         }
     }
 
@@ -840,25 +849,31 @@ WindowProc(
     LPARAM  lParam
 ) {
     switch (message) {
-        case WM_DESTROY:
+        case WM_DESTROY: {
             PostQuitMessage(0);
             break;
-        case WM_KEYDOWN:
+        } case WM_KEYDOWN: {
+            BOOL repeatFlag = (HIWORD(lParam) & KF_REPEAT) == KF_REPEAT;
             switch (wParam) {
                 case VK_ESCAPE: PostQuitMessage(0); break;
+                case VK_F1: input.console_toggle = true; break;
                 case VK_PRIOR: input.console_page_up = true; break;
                 case VK_NEXT: input.console_page_down = true; break;
             }
             if (wParam == VK_ESCAPE) PostQuitMessage(0);
             break;
-        default:
+        } case WM_KEYUP: {
             switch (wParam) {
+                case VK_F1: input.console_toggle = false; break;
                 case VK_PRIOR: input.console_page_up = false; break;
                 case VK_NEXT: input.console_page_down = false; break;
             }
             break;
+        } default: {
+            return DefWindowProc(window, message, wParam, lParam);
+        }
     }
-    return DefWindowProc(window, message, wParam, lParam);
+    return 0;
 }
 
 int __stdcall
@@ -871,6 +886,7 @@ WinMain(
     auto error = fopen_s(&logFile, "LOG", "w");
     if (error) exit(-1);
     console = initConsole(1 * 1024 * 1024);
+    console.show = true;
 
     QueryPerformanceCounter(&counterEpoch);
     QueryPerformanceFrequency(&counterFrequency);
@@ -959,19 +975,20 @@ WinMain(
         // NOTE(jan): Pump WIN32 message queue.
         MSG msg;
         BOOL messageAvailable;
-        do {
+        while(true) {
             messageAvailable = PeekMessage(
                 &msg,
                 (HWND)nullptr,
                 0, 0,
                 PM_REMOVE
             );
+            if (!messageAvailable) break;
             TranslateMessage(&msg);
             if (msg.message == WM_QUIT) {
                 done = true;
             }
             DispatchMessage(&msg);
-        } while(messageAvailable);
+        }
 
         doFrame(vk, renderer);
     }
