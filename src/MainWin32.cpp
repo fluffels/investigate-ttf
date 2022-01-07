@@ -206,6 +206,7 @@ struct Mesh {
     MeshInfo info;
 
     umm vertexCount;
+    umm vertexSizeInFloats;
     vector<f32> vertices;
 
     umm indexCount;
@@ -448,7 +449,13 @@ void pushAABox(Mesh& mesh, AABox& box, Vec4& color) {
 
 AABox
 pushText(Mesh& mesh, Font& font, AABox& box, String text, Vec4 color) {
-    AABox result = {};
+    AABox result = {
+        .x0 = box.x0,
+        .y1 = box.y1
+    };
+
+    umm startVertexIndex = mesh.vertices.size();
+    umm lineBreaks = 0;
 
     f32 x = box.x0;
     f32 y = box.y1;
@@ -481,6 +488,13 @@ pushText(Mesh& mesh, Font& font, AABox& box, String text, Vec4 color) {
         stbtt_aligned_quad quad;
         stbtt_GetPackedQuad(&cdata, font.bitmapSideLength, font.bitmapSideLength, 0, &x, &y, &quad, 0);
 
+        if (quad.x1 > box.x1) {
+            lineBreaks++;
+            x = box.x0;
+            y += font.info.size;
+            stbtt_GetPackedQuad(&cdata, font.bitmapSideLength, font.bitmapSideLength, 0, &x, &y, &quad, 0);
+        }
+
         AABox charBox = {
             .x0 = quad.x0,
             .x1 = quad.x1,
@@ -489,8 +503,6 @@ pushText(Mesh& mesh, Font& font, AABox& box, String text, Vec4 color) {
         };
         result.x0 = min(charBox.x0, result.x0);
         result.x1 = fmax(charBox.x1, result.x1);
-        result.y0 = min(charBox.y0, result.y0);
-        result.y1 = fmax(charBox.y1, result.y1);
 
         AABox tex = {
             .x0 = quad.s0,
@@ -504,6 +516,13 @@ pushText(Mesh& mesh, Font& font, AABox& box, String text, Vec4 color) {
         stringIndex++;
     }
 
+    if (lineBreaks > 0) {
+        for (umm vertexIndex = startVertexIndex; vertexIndex < mesh.vertices.size(); vertexIndex += mesh.vertexSizeInFloats) {
+            mesh.vertices[vertexIndex + 1] -= font.info.size * lineBreaks;
+        }
+    }
+
+    result.y0 = result.y1 - (lineBreaks + 1) * font.info.size;
     return result;
 }
 
@@ -568,6 +587,7 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
 
     AABox consoleLineBox = {
         .x0 = margin,
+        .x1 = backgroundBox.x1,
         .y1 = backgroundBox.y1 - margin,
     };
     AABox promptBox = pushText(text, font, consoleLineBox, stringLiteral("> "), base01);
@@ -575,6 +595,7 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
     f32 cursorAlpha = (1 + sin(frameStart * 10.f)) / 2.f;
     AABox cursorBox = {};
     cursorBox.x0 = promptBox.x1;
+    cursorBox.x1 = backgroundBox.x1;
     cursorBox.y1 = promptBox.y1;
     Vec4 cursorColor = {
         .x = base01.x,
@@ -582,12 +603,14 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
         .z = base01.z,
         .w = cursorAlpha
     };
-    pushText(text, font, cursorBox, stringLiteral("_"), cursorColor);
+    cursorBox = pushText(text, font, cursorBox, stringLiteral("_"), cursorColor);
 
-    consoleLineBox.y1 -= font.info.size;
+    consoleLineBox.y1 = cursorBox.y0;
 
     // NOTE(jan): Building mesh for console scrollback.
-    for (umm lineIndex = console.lines.next - 1 - console.lines.viewOffset; lineIndex > console.lines.first; lineIndex--) {
+    // for (umm lineIndex = console.lines.next - 1 - console.lines.viewOffset; lineIndex > console.lines.first; lineIndex--) {
+    umm lineIndex = console.lines.next > 0 ? console.lines.next - 1 : console.lines.count - 1;
+    for (umm i = 0; i < console.lines.count; i++) {
         if (consoleLineBox.y1 < 0) break;
         ConsoleLine line = console.lines.data[lineIndex];
         String consoleText = {
@@ -595,8 +618,14 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
             .length = line.size,
             .data = (char*)console.data + line.start,
         };
-        pushText(text, font, consoleLineBox, consoleText, base01);
-        consoleLineBox.y1 -= font.info.size;
+        AABox prevLineBox = pushText(text, font, consoleLineBox, consoleText, base01);
+        consoleLineBox.y1 = prevLineBox.y0;
+
+        if (lineIndex > 0) {
+            lineIndex--;
+        } else {
+            lineIndex = console.lines.count - 1;
+        }
     }
 
     // NOTE(jan): Start recording commands.
@@ -717,7 +746,11 @@ void init(Vulkan& vk, Renderer& renderer) {
     for (const MeshInfo& info: meshInfo) {
         INFO("Creating mesh '%s'...", info.name);
 
-        Mesh mesh = { .info = info, };
+        Mesh mesh = {
+            .info = info,
+            // TODO(jan): Calculate this from mesh metadata.
+            .vertexSizeInFloats = 8
+        };
 
         RENDERER_PUT(mesh, meshes, info.name);
     }
