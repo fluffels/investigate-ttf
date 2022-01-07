@@ -321,7 +321,7 @@ packFont(Font& font) {
     stbtt_PackEnd(&ctxt);
 
     if (font.sampler.handle != VK_NULL_HANDLE) {
-        // TODO(jan): Free sampler.
+        destroySampler(vk, font.sampler);
     }
 
     uploadTexture(vk, font.bitmapSideLength, font.bitmapSideLength, VK_FORMAT_R8_UNORM, bitmap, bitmapSize, font.sampler);
@@ -543,6 +543,8 @@ void doFrame(Vulkan& vk, Renderer& renderer, Input& input) {
     beginInfo.renderArea.offset = {0, 0};
     beginInfo.renderPass = vk.renderPass;
 
+    std::vector<VulkanMesh> meshesToFree;
+
     vkCmdBeginRenderPass(cmds, &beginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
     for (auto& kv: renderer.brushes) {
@@ -567,7 +569,7 @@ void doFrame(Vulkan& vk, Renderer& renderer, Input& input) {
         RENDERER_GET(mesh, meshes, brush.info.meshName);
         if ((mesh.indexCount == 0) || (mesh.vertexCount == 0)) continue;
 
-        VulkanMesh vkMesh = {};
+        VulkanMesh& vkMesh = meshesToFree.emplace_back();
         uploadMesh(
             vk,
             mesh.vertices.data(), sizeof(mesh.vertices[0]) * mesh.vertices.size(),
@@ -612,6 +614,9 @@ void doFrame(Vulkan& vk, Renderer& renderer, Input& input) {
     vkQueueWaitIdle(vk.queue);
 
     // Cleanup.
+    for (auto& mesh: meshesToFree) {
+        destroyMesh(vk, mesh);
+    }
     if (font.isDirty) packFont(font);
 }
 
