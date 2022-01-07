@@ -19,12 +19,38 @@
 // * LOGGING *
 // ***********
 
+struct ConsoleLine {
+    // NOTE(jan): Relative to Console::bytesRead
+    umm start;
+    umm size;
+};
+
+#define MAX_SCROLLBACK_LINES 1024
+struct LineBuffer {
+    ConsoleLine data[MAX_SCROLLBACK_LINES];
+    umm first;
+    umm next;
+    umm count;
+    umm max;
+};
+
 struct Console {
     void* data;
+    umm bytesRead;
     umm top;
     umm bottom;
     umm size;
+    LineBuffer lines;
 };
+
+void
+consolePushLine(Console& console, ConsoleLine& line) {
+    LineBuffer& lines = console.lines;
+    lines.data[lines.next] = line;
+    lines.next = (lines.next + 1) % lines.max;
+    lines.first = lines.count < lines.max ? 0 : lines.next + 1;
+    lines.count = min(lines.max, lines.count + 1);
+}
 
 Console console;
 LARGE_INTEGER counterEpoch;
@@ -43,10 +69,15 @@ float getElapsed() {
 void log(const char* level, const char* fileName, int lineNumber, const char* fmt, ...) {
     char* consoleEnd = (char*)console.data + console.bottom;
 
+    ConsoleLine line;
+    line.start = console.bottom;
+
     const char* prefixFmt = "[%s] [%f] [%s:%d] ";
 
     fprintf(logFile, prefixFmt, level, getElapsed(), fileName, lineNumber);
     int written = sprintf(consoleEnd, prefixFmt, level, getElapsed(), fileName, lineNumber);
+    line.size = written;
+    console.bytesRead += written;
     console.bottom = (console.bottom + written) % console.size;
     consoleEnd = (char*)console.data + console.bottom;
 
@@ -54,14 +85,20 @@ void log(const char* level, const char* fileName, int lineNumber, const char* fm
     va_start(args, fmt);
     vfprintf(logFile, fmt, args);
     written = vsnprintf(consoleEnd, console.size, fmt, args);
+    line.size += written;
+    console.bytesRead += written;
     console.bottom = (console.bottom + written) % console.size;
     consoleEnd = (char*)console.data + console.bottom;
     va_end(args);
 
     fprintf(logFile, "\n");
     written = sprintf(consoleEnd, "\n");
+    line.size += written;
+    console.bytesRead += written;
     console.bottom = (console.bottom + written) % console.size;
     fflush(logFile);
+
+    consolePushLine(console, line);
 }
 
 #define LOG(level, fmt, ...) log(level, __FILE__, __LINE__, fmt, __VA_ARGS__)
@@ -501,6 +538,7 @@ void doFrame(Vulkan& vk, Renderer& renderer, Input& input) {
     RENDERER_GET(text, meshes, "text");
     RENDERER_GET(font, fonts, "default");
 
+    // NOTE(jan): Building mesh for console.
     AABox backgroundBox = {
         .x0 = 0.f,
         .x1 = windowWidth,
@@ -509,17 +547,28 @@ void doFrame(Vulkan& vk, Renderer& renderer, Input& input) {
     };
     pushAABox(boxes, backgroundBox, base03);
 
-    AABox consoleBox = {
-        .x0 = font.info.size / 2.f,
-        .y1 = font.info.size,
+    // NOTE(jan): Building mesh for console prompt.
+    const f32 margin = font.info.size / 2.f;
+    AABox consoleLineBox = {
+        .x0 = margin,
+        .y1 = backgroundBox.y1 - margin,
     };
-    struct String consoleText = {
-        .size = console.size,
-        // TODO(jan): This is wrong
-        .length = console.bottom - console.top,
-        .data = (char*)console.data + console.top,
-    };
-    pushText(text, font, consoleBox, consoleText, base01);
+    pushText(text, font, consoleLineBox, stringLiteral("> "), base01);
+    consoleLineBox.y1 -= font.info.size;
+
+    // NOTE(jan): Building mesh for console scrollback.
+    for (umm lineIndex = console.lines.next - 1; lineIndex > console.lines.first; lineIndex--) {
+        if (consoleLineBox.y1 < 0) break;
+        ConsoleLine line = console.lines.data[lineIndex];
+        String consoleText = {
+            .size = line.size,
+            // TODO(jan): This is wrong
+            .length = line.size,
+            .data = (char*)console.data + line.start,
+        };
+        pushText(text, font, consoleLineBox, consoleText, base01);
+        consoleLineBox.y1 -= font.info.size;
+    }
 
     // NOTE(jan): Start recording commands.
     VkCommandBuffer cmds = {};
@@ -671,7 +720,7 @@ void init(Vulkan& vk, Renderer& renderer) {
 Input input;
 
 // Derived from https://github.com/cmuratori/refterm/blob/main/refterm_example_source_buffer.c
-Console allocateConsole(size_t bufferSize) {
+Console initConsole(size_t bufferSize) {
     Console result = {};
 
     SYSTEM_INFO info;
@@ -719,6 +768,7 @@ Console allocateConsole(size_t bufferSize) {
     result.size = bufferSize;
     result.top = 0;
     result.bottom = 0;
+    result.lines.max = MAX_SCROLLBACK_LINES;
     return result;
 }
 
@@ -760,7 +810,7 @@ WinMain(
 ) {
     auto error = fopen_s(&logFile, "LOG", "w");
     if (error) exit(-1);
-    console = allocateConsole(1 * 1024 * 1024);
+    console = initConsole(1 * 1024 * 1024);
 
     QueryPerformanceCounter(&counterEpoch);
     QueryPerformanceFrequency(&counterFrequency);
