@@ -1,5 +1,4 @@
 #include "Vulkan.h"
-#include <stdio.h>
 #pragma warning (disable: 4267)
 #pragma warning (disable: 4996)
 
@@ -32,6 +31,7 @@ struct LineBuffer {
     umm next;
     umm count;
     umm max;
+    umm viewOffset;
 };
 
 struct Console {
@@ -136,17 +136,6 @@ using std::set;
 const int WIDTH = 800;
 const int HEIGHT = 800;
 
-enum KEYBOARD_KEYS {
-    KEYBOARD_KEY_NONE,
-    KEYBOARD_KEY_FORWARD,
-    KEYBOARD_KEY_BACKWARD,
-    KEYBOARD_KEY_LEFT,
-    KEYBOARD_KEY_RIGHT,
-    KEYBOARD_KEY_RESET,
-    KEYBOARD_KEY_QUIT,
-    KEYBOARD_KEY_COUNT
-};
-
 // ************************************************************
 // * MATH: Definitions for geometric mathematical primitives. *
 // ************************************************************
@@ -167,10 +156,6 @@ struct Uniforms {
     float ortho[16];
     Vec4 eye;
     Vec4 rotation;
-};
-
-struct Input {
-    bool keyboard_keys[KEYBOARD_KEY_COUNT];
 };
 
 struct FontInfo {
@@ -498,7 +483,7 @@ void pushText(Mesh& mesh, Font& font, AABox& box, String text, Vec4 color) {
     }
 }
 
-void doFrame(Vulkan& vk, Renderer& renderer, Input& input) {
+void doFrame(Vulkan& vk, Renderer& renderer) {
     // NOTE(jan): Acquire swap image.
     uint32_t swapImageIndex = 0;
     auto result = vkAcquireNextImageKHR(
@@ -557,7 +542,7 @@ void doFrame(Vulkan& vk, Renderer& renderer, Input& input) {
     consoleLineBox.y1 -= font.info.size;
 
     // NOTE(jan): Building mesh for console scrollback.
-    for (umm lineIndex = console.lines.next - 1; lineIndex > console.lines.first; lineIndex--) {
+    for (umm lineIndex = console.lines.next - 1 - console.lines.viewOffset; lineIndex > console.lines.first; lineIndex--) {
         if (consoleLineBox.y1 < 0) break;
         ConsoleLine line = console.lines.data[lineIndex];
         String consoleText = {
@@ -717,8 +702,6 @@ void init(Vulkan& vk, Renderer& renderer) {
 // * WIN32: Windows specific stuff. *
 // **********************************
 
-Input input;
-
 // Derived from https://github.com/cmuratori/refterm/blob/main/refterm_example_source_buffer.c
 Console initConsole(size_t bufferSize) {
     Console result = {};
@@ -787,14 +770,17 @@ WindowProc(
             switch (wParam) {
                 case VK_ESCAPE: PostQuitMessage(0); break;
                 // TODO(jan): Key mapping.
-                case 'W': input.keyboard_keys[KEYBOARD_KEY_FORWARD] = true;
+                // NOTE(jan): This is Page Up
+                case VK_PRIOR: 
+                    if (console.lines.viewOffset < console.lines.count - 1) console.lines.viewOffset++;
+                    break;
+                // NOTE(jan): This is Page Down
+                case VK_NEXT:
+                    if (console.lines.viewOffset > 0) console.lines.viewOffset--;
+                    break;
             }
             if (wParam == VK_ESCAPE) PostQuitMessage(0);
-            // else state.keyboard[(uint16_t)wParam] = true;
             break;
-        // case WM_KEYUP:
-            // state.keyboard[(uint16_t)wParam] = false;
-            // break;
         default:
             break;
     }
@@ -913,7 +899,7 @@ WinMain(
             DispatchMessage(&msg);
         } while(messageAvailable);
 
-        doFrame(vk, renderer, input);
+        doFrame(vk, renderer);
     }
 
     return 0;
