@@ -140,6 +140,10 @@ const int HEIGHT = 800;
 // * MATH: Definitions for geometric mathematical primitives. *
 // ************************************************************
 
+inline int max(int a, int b) {
+    return (a > b) ? (a) : (b);
+}
+
 struct AABox {
     f32 x0;
     f32 x1;
@@ -442,7 +446,10 @@ void pushAABox(Mesh& mesh, AABox& box, Vec4& color) {
     pushAABox(mesh, box, tex, color);
 }
 
-void pushText(Mesh& mesh, Font& font, AABox& box, String text, Vec4 color) {
+AABox
+pushText(Mesh& mesh, Font& font, AABox& box, String text, Vec4 color) {
+    AABox result = {};
+
     f32 x = box.x0;
     f32 y = box.y1;
 
@@ -480,6 +487,10 @@ void pushText(Mesh& mesh, Font& font, AABox& box, String text, Vec4 color) {
             .y0 = quad.y0,
             .y1 = quad.y1
         };
+        result.x0 = min(charBox.x0, result.x0);
+        result.x1 = fmax(charBox.x1, result.x1);
+        result.y0 = min(charBox.y0, result.y0);
+        result.y1 = fmax(charBox.y1, result.y1);
 
         AABox tex = {
             .x0 = quad.s0,
@@ -492,9 +503,13 @@ void pushText(Mesh& mesh, Font& font, AABox& box, String text, Vec4 color) {
 
         stringIndex++;
     }
+
+    return result;
 }
 
 void doFrame(Vulkan& vk, Renderer& renderer) {
+    f32 frameStart = getElapsed();
+
     // NOTE(jan): Acquire swap image.
     uint32_t swapImageIndex = 0;
     auto result = vkAcquireNextImageKHR(
@@ -555,7 +570,20 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
         .x0 = margin,
         .y1 = backgroundBox.y1 - margin,
     };
-    pushText(text, font, consoleLineBox, stringLiteral("> "), base01);
+    AABox promptBox = pushText(text, font, consoleLineBox, stringLiteral("> "), base01);
+
+    f32 cursorAlpha = (1 + sin(frameStart * 10.f)) / 2.f;
+    AABox cursorBox = {};
+    cursorBox.x0 = promptBox.x1;
+    cursorBox.y1 = promptBox.y1;
+    Vec4 cursorColor = {
+        .x = base01.x,
+        .y = base01.y,
+        .z = base01.z,
+        .w = cursorAlpha
+    };
+    pushText(text, font, cursorBox, stringLiteral("_"), cursorColor);
+
     consoleLineBox.y1 -= font.info.size;
 
     // NOTE(jan): Building mesh for console scrollback.
