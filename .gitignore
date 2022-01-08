@@ -33,11 +33,14 @@
 
 # Build Artifacts
 build
+*.spv
 
 # CMake Artifacts
 CMakeCache.txt
 CmakeFiles
 
+# Clang Artifacts
+.cache
+
 # Run Artifacts
-myeasylog.log
-save.dat
+LOG
