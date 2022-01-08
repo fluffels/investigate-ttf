@@ -609,8 +609,12 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
         const f32 console_height = backgroundBox.y1 - backgroundBox.y0 - margin;
         const u32 console_line_height = console_height / font.info.size;
 
-        if (input.consolePageUp && (console.lines.viewOffset < console.lines.count - console_line_height)) console.lines.viewOffset++;
-        if (input.consolePageDown && (console.lines.viewOffset > 0)) console.lines.viewOffset--;
+        if (input.consolePageUp && (console.lines.viewOffset < console.lines.count - console_line_height)) {
+            console.lines.viewOffset++;
+        }
+        if (input.consolePageDown && (console.lines.viewOffset > 0)) {
+            console.lines.viewOffset--;
+        }
 
         AABox consoleLineBox = {
             .x0 = margin,
@@ -635,8 +639,8 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
         consoleLineBox.y1 = cursorBox.y0;
 
         // NOTE(jan): Building mesh for console scrollback.
-        // for (umm lineIndex = console.lines.next - 1 - console.lines.viewOffset; lineIndex > console.lines.first; lineIndex--) {
-        umm lineIndex = console.lines.next > 0 ? console.lines.next - 1 : console.lines.count - 1;
+        umm top = console.lines.next >= 1 + console.lines.viewOffset ? console.lines.next : console.lines.count;
+        umm lineIndex = top - 1 - console.lines.viewOffset;
         for (umm i = 0; i < console.lines.count; i++) {
             if (consoleLineBox.y1 < 0) break;
             ConsoleLine line = console.lines.data[lineIndex];
