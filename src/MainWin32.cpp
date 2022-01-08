@@ -67,6 +67,20 @@ float getElapsed() {
     return result;
 }
 
+void logRaw(const char* s) {
+    char* consoleEnd = (char*)console.data + console.bottom;
+    fprintf(logFile, "%s", s);
+    int written = sprintf(consoleEnd, "%s", s);
+
+    ConsoleLine line;
+    line.start = console.bottom;
+    line.size = written;
+    consolePushLine(console, line);
+
+    console.bytesRead += written;
+    console.bottom = (console.bottom + written) % console.size;
+}
+
 void log(const char* level, const char* fileName, int lineNumber, const char* fmt, ...) {
     char* consoleEnd = (char*)console.data + console.bottom;
 
@@ -157,9 +171,10 @@ struct AABox {
 // ******
 
 struct Input {
-    bool console_page_down;
-    bool console_page_up;
-    bool console_toggle;
+    bool consolePageDown;
+    bool consolePageUp;
+    bool consoleNewLine;
+    bool consoleToggle;
 };
 
 // ******************************************************************************************
@@ -570,9 +585,13 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
     RENDERER_GET(text, meshes, "text");
     RENDERER_GET(font, fonts, "default");
 
-    if (input.console_toggle) {
+    if (input.consoleToggle) {
         console.show = !console.show;
-        input.console_toggle = false;
+        input.consoleToggle = false;
+    }
+    if (input.consoleNewLine) {
+        logRaw("> ");
+        input.consoleNewLine = false;
     }
 
     if (console.show) {
@@ -590,8 +609,8 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
         const f32 console_height = backgroundBox.y1 - backgroundBox.y0 - margin;
         const u32 console_line_height = console_height / font.info.size;
 
-        if (input.console_page_up && (console.lines.viewOffset < console.lines.count - console_line_height)) console.lines.viewOffset++;
-        if (input.console_page_down && (console.lines.viewOffset > 0)) console.lines.viewOffset--;
+        if (input.consolePageUp && (console.lines.viewOffset < console.lines.count - console_line_height)) console.lines.viewOffset++;
+        if (input.consolePageDown && (console.lines.viewOffset > 0)) console.lines.viewOffset--;
 
         AABox consoleLineBox = {
             .x0 = margin,
@@ -856,17 +875,17 @@ WindowProc(
             BOOL repeatFlag = (HIWORD(lParam) & KF_REPEAT) == KF_REPEAT;
             switch (wParam) {
                 case VK_ESCAPE: PostQuitMessage(0); break;
-                case VK_F1: input.console_toggle = true; break;
-                case VK_PRIOR: input.console_page_up = true; break;
-                case VK_NEXT: input.console_page_down = true; break;
+                case VK_PRIOR: input.consolePageUp = true; break;
+                case VK_NEXT: input.consolePageDown = true; break;
+                case VK_RETURN: input.consoleNewLine = true; break;
+                case VK_F1: input.consoleToggle = true; break;
             }
-            if (wParam == VK_ESCAPE) PostQuitMessage(0);
             break;
         } case WM_KEYUP: {
             switch (wParam) {
-                case VK_F1: input.console_toggle = false; break;
-                case VK_PRIOR: input.console_page_up = false; break;
-                case VK_NEXT: input.console_page_down = false; break;
+                case VK_F1: input.consoleToggle = false; break;
+                case VK_PRIOR: input.consolePageUp = false; break;
+                case VK_NEXT: input.consolePageDown = false; break;
             }
             break;
         } default: {
