@@ -1,26 +1,23 @@
 #include "Render.h"
-#include "RenderMesh.h"
-#include "RenderText.h"
 #include "State.h"
 
 #include "MathLib.cpp"
 
-vector<VkCommandBuffer> meshCmds;
-vector<VkCommandBuffer> textCmds;
+#include "Text.cpp"
 
 void renderInit(Vulkan& vk, Uniforms& uniforms) {
     auto fov = toRadians(45);
     auto height = vk.swap.extent.height;
     auto width = vk.swap.extent.width;
-    auto nearz = .1f;
-    auto farz = 10.f;
-    matrixProjection(width, height, fov, farz, nearz, uniforms.proj);
+    auto nearZ = .1f;
+    auto farZ = 10.f;
+    matrixProjection(width, height, fov, farZ, nearZ, uniforms.proj);
 
     eventPositionReset(uniforms);
 
     quaternionInit(uniforms.rotation);
 
-    renderMesh(vk, meshCmds);
+    initText(vk);
 }
 
 void renderFrame(Vulkan& vk, char* debugString) {

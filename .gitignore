@@ -39,6 +39,9 @@ build
 CMakeCache.txt
 CmakeFiles
 
+# Clang Artifacts
+.cache
+
 # Run Artifacts
 LOG
 save.dat

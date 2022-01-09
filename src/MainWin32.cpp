@@ -1,66 +1,870 @@
+#include "Vulkan.h"
 #pragma warning (disable: 4267)
 #pragma warning (disable: 4996)
 
-#include <iomanip>
-
 #include <Windows.h>
+#include <cstdio>
+#include <map>
+#include <set>
 
+#define STB_RECT_PACK_IMPLEMENTATION
+#include "stb/stb_rect_pack.h"
+#define STB_TRUETYPE_IMPLEMENTATION
+#include "stb/stb_truetype.h"
 
-#include "easylogging++.h"
-INITIALIZE_EASYLOGGINGPP
+#include "Types.h"
 
-#include "Win32/DirectInput.h"
-#include "Win32/Mouse.h"
-#include "Render.h"
-#include "RenderMesh.h"
-#include "RenderText.h"
-#include "State.h"
-#include "Vulkan.h"
+// ***********
+// * LOGGING *
+// ***********
+
+struct ConsoleLine {
+    // NOTE(jan): Relative to Console::bytesRead
+    umm start;
+    umm size;
+};
+
+#define MAX_SCROLLBACK_LINES 1024
+struct LineBuffer {
+    ConsoleLine data[MAX_SCROLLBACK_LINES];
+    umm first;
+    umm next;
+    umm count;
+    umm max;
+    umm viewOffset;
+};
+
+struct Console {
+    void* data;
+    umm bytesRead;
+    umm top;
+    umm bottom;
+    umm size;
+    LineBuffer lines;
+    bool show;
+};
+
+void
+consolePushLine(Console& console, ConsoleLine& line) {
+    LineBuffer& lines = console.lines;
+    lines.data[lines.next] = line;
+    lines.next = (lines.next + 1) % lines.max;
+    lines.first = lines.count < lines.max ? 0 : lines.next + 1;
+    lines.count = min(lines.max, lines.count + 1);
+}
+
+Console console;
+LARGE_INTEGER counterEpoch;
+LARGE_INTEGER counterFrequency;
+static FILE* logFile;
+
+float getElapsed() {
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    auto result =
+        (t.QuadPart - counterEpoch.QuadPart)
+        / (float)counterFrequency.QuadPart;
+    return result;
+}
+
+void logRaw(const char* s) {
+    char* consoleEnd = (char*)console.data + console.bottom;
+    fprintf(logFile, "%s", s);
+    int written = sprintf(consoleEnd, "%s", s);
+
+    ConsoleLine line;
+    line.start = console.bottom;
+    line.size = written;
+    consolePushLine(console, line);
+
+    console.bytesRead += written;
+    console.bottom = (console.bottom + written) % console.size;
+}
+
+void log(const char* level, const char* fileName, int lineNumber, const char* fmt, ...) {
+    char* consoleEnd = (char*)console.data + console.bottom;
+
+    ConsoleLine line;
+    line.start = console.bottom;
+
+    const char* prefixFmt = "[%s] [%f] [%s:%d] ";
+
+    fprintf(logFile, prefixFmt, level, getElapsed(), fileName, lineNumber);
+    int written = sprintf(consoleEnd, prefixFmt, level, getElapsed(), fileName, lineNumber);
+    line.size = written;
+    console.bytesRead += written;
+    console.bottom = (console.bottom + written) % console.size;
+    consoleEnd = (char*)console.data + console.bottom;
+
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(logFile, fmt, args);
+    written = vsnprintf(consoleEnd, console.size, fmt, args);
+    line.size += written;
+    console.bytesRead += written;
+    console.bottom = (console.bottom + written) % console.size;
+    consoleEnd = (char*)console.data + console.bottom;
+    va_end(args);
+
+    fprintf(logFile, "\n");
+    written = sprintf(consoleEnd, "\n");
+    line.size += written;
+    console.bytesRead += written;
+    console.bottom = (console.bottom + written) % console.size;
+    fflush(logFile);
+
+    consolePushLine(console, line);
+}
+
+#define LOG(level, fmt, ...) log(level, __FILE__, __LINE__, fmt, __VA_ARGS__)
+#define FATAL(fmt, ...) {\
+    LOG("FATAL", fmt, __VA_ARGS__);\
+    fclose(logFile);\
+    exit(1);\
+}
+#define INFO(fmt, ...) LOG("INFO", fmt, __VA_ARGS__)
+#define WARN(fmt, ...) LOG("WARN", fmt, __VA_ARGS__)
+#define ERR(fmt, ...) LOG("ERR", fmt, __VA_ARGS__)
+
+#define CHECK(x, fmt, ...) if (!x) { FATAL(fmt, __VA_ARGS__) }
+#define LERROR(x) \
+    if (x) {      \
+        char buffer[1024]; \
+        strerror_s(buffer, x); \
+        FATAL("%s", buffer); \
+    }
+
+// ***************
+// * END LOGGING *
+// ***************
+
+#include "Memory.cpp"
+#include "String.cpp"
+#include "MathLib.cpp"
+#include "FileSystem.cpp"
+#include "Vulkan.cpp"
 #include <vulkan/vulkan_win32.h>
 
-using std::exception;
-using std::setprecision;
-using std::fixed;
-using std::setw;
-
-#define WIN32_CHECK(e, m) if (e != S_OK) throw new std::runtime_error(m)
+using std::map;
+using std::set;
 
 const int WIDTH = 800;
 const int HEIGHT = 800;
 
-const float DELTA_MOVE_PER_S = 10.f;
-const float MOUSE_SENSITIVITY = 0.1f;
-const float JOYSTICK_SENSITIVITY = 5;
+// ************************************************************
+// * MATH: Definitions for geometric mathematical primitives. *
+// ************************************************************
 
-bool keyboard[VK_OEM_CLEAR] = {};
+inline int max(int a, int b) {
+    return (a > b) ? (a) : (b);
+}
 
-VkSurfaceKHR getSurface(
-    HWND window,
-    HINSTANCE instance,
-    const VkInstance& vkInstance
-) {
-    VkSurfaceKHR surface;
+struct AABox {
+    f32 x0;
+    f32 x1;
+    f32 y0;
+    f32 y1;
+};
 
-    VkWin32SurfaceCreateInfoKHR createInfo = {};
-    createInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
-    createInfo.hinstance = instance;
-    createInfo.hwnd = window;
+// ******
+// * UI *
+// ******
 
-    auto result = vkCreateWin32SurfaceKHR(
-        vkInstance,
-        &createInfo,
-        nullptr,
-        &surface
+struct Input {
+    bool consolePageDown;
+    bool consolePageUp;
+    bool consoleNewLine;
+    bool consoleToggle;
+};
+
+// ******************************************************************************************
+// * RESOURCE: Definitions for rendering resources (meshes, fonts, textures, pipelines &c). *
+// ******************************************************************************************
+
+struct Uniforms {
+    float proj[16];
+    float ortho[16];
+    Vec4 eye;
+    Vec4 rotation;
+};
+
+struct FontInfo {
+    const char* name;
+    const char* path;
+    float size;
+};
+
+struct FontInfo fontInfo[] = {
+    {
+        .name = "default",
+        .path = "./fonts/AzeretMono-Medium.ttf",
+        .size = 20.f
+    },
+};
+
+struct Font {
+    FontInfo info;
+    bool isDirty;
+    vector<char> ttfFileContents;
+
+    u32 bitmapSideLength;
+    VulkanSampler sampler;
+
+    set<u32> codepointsToLoad;
+    set<u32> failedCodepoints;
+    map<u32, stbtt_packedchar> dataForCodepoint;
+};
+
+struct MeshInfo {
+    const char* name;
+};
+
+struct Mesh {
+    MeshInfo info;
+
+    umm vertexCount;
+    umm vertexSizeInFloats;
+    vector<f32> vertices;
+
+    umm indexCount;
+    vector<u32> indices;
+};
+
+enum ResourceType {
+    RESOURCE_TYPE_NONE,
+    RESOURCE_TYPE_FONT,
+    RESOURCE_TYPE_COUNT,
+};
+
+struct UniformInfo {
+    const char* name;
+    ResourceType resourceType;
+    const char* resourceName;
+};
+
+MeshInfo meshInfo[] = {
+    {
+        .name = "boxes",
+    },
+    {
+        .name = "text",
+    },
+};
+
+PipelineInfo pipelineInfo[] = {
+    {
+        .name = "text",
+        .vertexShaderPath = "shaders/ortho_xy_uv_rgba.vert.spv",
+        .fragmentShaderPath = "shaders/text.frag.spv",
+        .clockwiseWinding = true,
+        .cullBackFaces = false,
+        .depthEnabled = false,
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
+    },
+    {
+        .name = "boxes",
+        .vertexShaderPath = "shaders/ortho_xy_uv_rgba.vert.spv",
+        .fragmentShaderPath = "shaders/boxes.frag.spv",
+        .clockwiseWinding = true,
+        .cullBackFaces = false,
+        .depthEnabled = false,
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
+    }
+};
+
+struct BrushInfo {
+    const char* name;
+    const char* meshName;
+    const char* pipelineName;
+    vector<UniformInfo> uniforms;
+};
+
+struct Brush {
+    BrushInfo info;
+};
+
+BrushInfo brushInfo[] = {
+    {
+        .name = "text",
+        .meshName = "text",
+        .pipelineName = "text",
+        .uniforms = {
+            {
+                .name = "glyphs",
+                .resourceType = RESOURCE_TYPE_FONT,
+                .resourceName = "default"
+            },
+        },
+    },
+    {
+        .name = "boxes",
+        .meshName = "boxes",
+        .pipelineName = "boxes"
+    }
+};
+
+struct Renderer {
+    map<const char*, Font> fonts;
+    map<const char*, Mesh> meshes;
+    map<const char*, VulkanPipeline> pipelines;
+    map<const char*, Brush> brushes;
+};
+
+#define RENDERER_GET(var, type, name) \
+    if (renderer.type.contains(name) == false) { \
+        FATAL("%s contains no entry named '%s'", #type, name); \
+    } \
+    auto& var = renderer.type.at(name)
+
+#define RENDERER_PUT(var, type, name) \
+    if (renderer.type.contains(#name) == true) { \
+        FATAL("%s already contains an entry named '%s'", #type, name); \
+    } \
+    renderer.type.insert({ name, var })
+
+// ***********
+// * GLOBALS *
+// ***********
+
+MemoryArena globalArena;
+
+Input input;
+
+RECT windowRect;
+f32 windowWidth;
+f32 windowHeight;
+
+Vulkan vk;
+Vec4 base03 = { .x =      0.f, .y =  43/255.f, .z =  54/255.f, .w = 1.f };
+Vec4 base01 = { .x = 88/255.f, .y = 110/255.f, .z = 117/255.f, .w = 1.f };
+Vec4 white =  { .x =      1.f, .y =       1.f, .z =       1.f, .w = 1.f };
+
+// **************************
+// * FONT: Font management. *
+// **************************
+
+void
+packFont(Font& font) {
+    INFO("Packing %llu codepoints", font.codepointsToLoad.size());
+
+    font.bitmapSideLength = 512;
+    umm bitmapSize = font.bitmapSideLength * font.bitmapSideLength;
+    u8* bitmap = new u8[font.bitmapSideLength * font.bitmapSideLength];
+
+    stbtt_pack_context ctxt = {};
+    stbtt_PackBegin(&ctxt, bitmap, font.bitmapSideLength, font.bitmapSideLength, 0, 1, NULL);
+
+    for (u32 codepoint: font.codepointsToLoad) {
+        if (font.failedCodepoints.contains(codepoint)) continue;
+
+        stbtt_packedchar cdata;
+        int result = stbtt_PackFontRange(
+            &ctxt,
+            (u8*)font.ttfFileContents.data(), 0,
+            font.info.size,
+            codepoint, 1,
+            &cdata
+        );
+        if (!result) {
+            INFO("Could not load codepoint %u", codepoint);
+            font.failedCodepoints.insert(codepoint);
+        } else {
+            font.dataForCodepoint[codepoint] = cdata;
+        }
+    }
+
+    stbtt_PackEnd(&ctxt);
+
+    if (font.sampler.handle != VK_NULL_HANDLE) {
+        destroySampler(vk, font.sampler);
+    }
+
+    uploadTexture(vk, font.bitmapSideLength, font.bitmapSideLength, VK_FORMAT_R8_UNORM, bitmap, bitmapSize, font.sampler);
+    delete[] bitmap;
+
+    font.isDirty = false;
+}
+
+// ***********************************************
+// * FRAME: Everything required to draw a frame. *
+// ***********************************************
+
+void
+pushAABox(Mesh& mesh, AABox& box, AABox& tex, Vec4& color) {
+    umm baseIndex = mesh.vertexCount;
+
+    // NOTE(jan): Assuming that x grows rightward, and y grows downward.
+    //            Number vertices of box clockwise starting at the top
+    //            left like v0, v1, v2, and v3.
+    // NOTE(jan): This is not implemented as triangle strips because boxes are
+    //            mostly disjoint.
+
+    // NOTE(jan): Top-left, v0.
+    mesh.vertices.push_back(box.x0);
+    mesh.vertices.push_back(box.y0);
+    mesh.vertices.push_back(tex.x0);
+    mesh.vertices.push_back(tex.y0);
+    mesh.vertices.push_back(color.x);
+    mesh.vertices.push_back(color.y);
+    mesh.vertices.push_back(color.z);
+    mesh.vertices.push_back(color.w);
+    mesh.vertexCount++;
+    // NOTE(jan): Top-right, v1.
+    mesh.vertices.push_back(box.x1);
+    mesh.vertices.push_back(box.y0);
+    mesh.vertices.push_back(tex.x1);
+    mesh.vertices.push_back(tex.y0);
+    mesh.vertices.push_back(color.x);
+    mesh.vertices.push_back(color.y);
+    mesh.vertices.push_back(color.z);
+    mesh.vertices.push_back(color.w);
+    mesh.vertexCount++;
+    // NOTE(jan): Bottom-right, v2.
+    mesh.vertices.push_back(box.x1);
+    mesh.vertices.push_back(box.y1);
+    mesh.vertices.push_back(tex.x1);
+    mesh.vertices.push_back(tex.y1);
+    mesh.vertices.push_back(color.x);
+    mesh.vertices.push_back(color.y);
+    mesh.vertices.push_back(color.z);
+    mesh.vertices.push_back(color.w);
+    mesh.vertexCount++;
+    // NOTE(jan): Bottom-left, v3.
+    mesh.vertices.push_back(box.x0);
+    mesh.vertices.push_back(box.y1);
+    mesh.vertices.push_back(tex.x0);
+    mesh.vertices.push_back(tex.y1);
+    mesh.vertices.push_back(color.x);
+    mesh.vertices.push_back(color.y);
+    mesh.vertices.push_back(color.z);
+    mesh.vertices.push_back(color.w);
+    mesh.vertexCount++;
+
+    // NOTE(jan): Top-right triangle.
+    mesh.indices.push_back(baseIndex + 0);
+    mesh.indices.push_back(baseIndex + 1);
+    mesh.indices.push_back(baseIndex + 2);
+    mesh.indexCount += 3;
+
+    // NOTE(jan): Bottom-left triangle.
+    mesh.indices.push_back(baseIndex + 0);
+    mesh.indices.push_back(baseIndex + 2);
+    mesh.indices.push_back(baseIndex + 3);
+    mesh.indexCount += 3;
+}
+
+void pushAABox(Mesh& mesh, AABox& box, Vec4& color) {
+    AABox tex = {
+        .x0 = 0,
+        .x1 = 1,
+        .y0 = 0,
+        .y1 = 1
+    };
+
+    pushAABox(mesh, box, tex, color);
+}
+
+AABox
+pushText(Mesh& mesh, Font& font, AABox& box, String text, Vec4 color) {
+    AABox result = {
+        .x0 = box.x0,
+        .y1 = box.y1
+    };
+
+    umm startVertexIndex = mesh.vertices.size();
+    umm lineBreaks = 0;
+
+    f32 x = box.x0;
+    f32 y = box.y1;
+
+    umm stringIndex = 0;
+
+    while (stringIndex < text.length) {
+        char c = text.data[stringIndex];
+
+        // TODO(jan): Better detection of new-lines (unicode).
+        if (c == '\n') {
+            x = box.x0;
+            y += font.info.size;
+            stringIndex++;
+            continue;
+        }
+        // TODO(jan): UTF-8 decoding.
+        u32 codepoint = (u32)c;
+
+        if (!font.dataForCodepoint.contains(codepoint)) {
+            if (!font.failedCodepoints.contains(codepoint)) {
+                font.codepointsToLoad.insert(codepoint);
+                font.isDirty = true;
+            }
+            stringIndex++;
+            continue;
+        }
+        stbtt_packedchar cdata = font.dataForCodepoint[codepoint];
+
+        stbtt_aligned_quad quad;
+        stbtt_GetPackedQuad(&cdata, font.bitmapSideLength, font.bitmapSideLength, 0, &x, &y, &quad, 0);
+
+        if (quad.x1 > box.x1) {
+            lineBreaks++;
+            x = box.x0;
+            y += font.info.size;
+            stbtt_GetPackedQuad(&cdata, font.bitmapSideLength, font.bitmapSideLength, 0, &x, &y, &quad, 0);
+        }
+
+        AABox charBox = {
+            .x0 = quad.x0,
+            .x1 = quad.x1,
+            .y0 = quad.y0,
+            .y1 = quad.y1
+        };
+        result.x0 = min(charBox.x0, result.x0);
+        result.x1 = fmax(charBox.x1, result.x1);
+
+        AABox tex = {
+            .x0 = quad.s0,
+            .x1 = quad.s1,
+            .y0 = quad.t0,
+            .y1 = quad.t1
+        };
+
+        pushAABox(mesh, charBox, tex, color);
+
+        stringIndex++;
+    }
+
+    if (lineBreaks > 0) {
+        for (umm vertexIndex = startVertexIndex; vertexIndex < mesh.vertices.size(); vertexIndex += mesh.vertexSizeInFloats) {
+            mesh.vertices[vertexIndex + 1] -= font.info.size * lineBreaks;
+        }
+    }
+
+    result.y0 = result.y1 - (lineBreaks + 1) * font.info.size;
+    return result;
+}
+
+void doFrame(Vulkan& vk, Renderer& renderer) {
+    f32 frameStart = getElapsed();
+
+    // NOTE(jan): Acquire swap image.
+    uint32_t swapImageIndex = 0;
+    auto result = vkAcquireNextImageKHR(
+        vk.device,
+        vk.swap.handle,
+        std::numeric_limits<uint64_t>::max(),
+        vk.swap.imageReady,
+        VK_NULL_HANDLE,
+        &swapImageIndex
     );
+    if ((result == VK_SUBOPTIMAL_KHR) ||
+        (result == VK_ERROR_OUT_OF_DATE_KHR)) {
+        // TODO(jan): Implement resize.
+        FATAL("could not acquire next image")
+    } else if (result != VK_SUCCESS) {
+        FATAL("could not acquire next image")
+    }
 
-    if (result != VK_SUCCESS) {
-        throw runtime_error("could not create win32 surface");
-    } else {
-        return surface;
+    // NOTE(jan): Calculate uniforms (projection matrix &c).
+    Uniforms uniforms;
+
+    matrixInit(uniforms.ortho);
+    matrixOrtho(windowWidth, windowHeight, uniforms.ortho);
+
+    updateUniforms(vk, &uniforms, sizeof(Uniforms));
+
+    // NOTE(jan): Meshes are cleared and recalculated each frame.
+    for (auto& pair: renderer.meshes) {
+        Mesh& mesh = pair.second;
+        mesh.indexCount = 0;
+        mesh.indices.clear();
+        mesh.vertexCount = 0;
+        mesh.vertices.clear();
+    }
+
+    RENDERER_GET(boxes, meshes, "boxes");
+    RENDERER_GET(text, meshes, "text");
+    RENDERER_GET(font, fonts, "default");
+
+    if (input.consoleToggle) {
+        console.show = !console.show;
+        input.consoleToggle = false;
+    }
+    if (input.consoleNewLine) {
+        logRaw("> ");
+        input.consoleNewLine = false;
+    }
+
+    if (console.show) {
+        // NOTE(jan): Building mesh for console.
+        AABox backgroundBox = {
+            .x0 = 0.f,
+            .x1 = windowWidth,
+            .y0 = 0.f,
+            .y1 = windowHeight / 2.f
+        };
+        pushAABox(boxes, backgroundBox, base03);
+
+        // NOTE(jan): Building mesh for console prompt.
+        const f32 margin = font.info.size / 2.f;
+        const f32 console_height = backgroundBox.y1 - backgroundBox.y0 - margin;
+        const u32 console_line_height = console_height / font.info.size;
+
+        if (input.consolePageUp && (console.lines.viewOffset < console.lines.count - console_line_height)) {
+            console.lines.viewOffset++;
+        }
+        if (input.consolePageDown && (console.lines.viewOffset > 0)) {
+            console.lines.viewOffset--;
+        }
+
+        AABox consoleLineBox = {
+            .x0 = margin,
+            .x1 = backgroundBox.x1,
+            .y1 = backgroundBox.y1 - margin,
+        };
+        AABox promptBox = pushText(text, font, consoleLineBox, stringLiteral("> "), base01);
+
+        f32 cursorAlpha = (1 + sin(frameStart * 10.f)) / 2.f;
+        AABox cursorBox = {};
+        cursorBox.x0 = promptBox.x1;
+        cursorBox.x1 = backgroundBox.x1;
+        cursorBox.y1 = promptBox.y1;
+        Vec4 cursorColor = {
+            .x = base01.x,
+            .y = base01.y,
+            .z = base01.z,
+            .w = cursorAlpha
+        };
+        cursorBox = pushText(text, font, cursorBox, stringLiteral("_"), cursorColor);
+
+        consoleLineBox.y1 = cursorBox.y0;
+
+        // NOTE(jan): Building mesh for console scrollback.
+        umm top = console.lines.next >= 1 + console.lines.viewOffset ? console.lines.next : console.lines.count;
+        umm lineIndex = top - 1 - console.lines.viewOffset;
+        for (umm i = 0; i < console.lines.count; i++) {
+            if (consoleLineBox.y1 < 0) break;
+            ConsoleLine line = console.lines.data[lineIndex];
+            String consoleText = {
+                .size = line.size,
+                .length = line.size,
+                .data = (char*)console.data + line.start,
+            };
+            AABox prevLineBox = pushText(text, font, consoleLineBox, consoleText, base01);
+            consoleLineBox.y1 = prevLineBox.y0;
+
+            if (lineIndex > 0) {
+                lineIndex--;
+            } else {
+                lineIndex = console.lines.count - 1;
+            }
+        }
+    }
+
+    // NOTE(jan): Start recording commands.
+    VkCommandBuffer cmds = {};
+    createCommandBuffers(vk.device, vk.cmdPool, 1, &cmds);
+    beginFrameCommandBuffer(cmds);
+
+    // NOTE(jan): Clear colour / depth.
+    VkClearValue colorClear;
+    colorClear.color = {1.f, 0.f, 1.f, 1.f};
+    VkClearValue depthClear;
+    depthClear.depthStencil = {1.f, 0};
+    VkClearValue clears[] = {colorClear, depthClear};
+
+    // NOTE(jan): Render pass.
+    VkRenderPassBeginInfo beginInfo = {};
+    beginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    beginInfo.clearValueCount = 2;
+    beginInfo.pClearValues = clears;
+    beginInfo.framebuffer = vk.swap.framebuffers[swapImageIndex];
+    beginInfo.renderArea.extent = vk.swap.extent;
+    beginInfo.renderArea.offset = {0, 0};
+    beginInfo.renderPass = vk.renderPass;
+
+    std::vector<VulkanMesh> meshesToFree;
+
+    vkCmdBeginRenderPass(cmds, &beginInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+    for (auto& kv: renderer.brushes) {
+        Brush& brush = kv.second;
+
+        RENDERER_GET(pipeline, pipelines, brush.info.pipelineName);
+        vkCmdBindPipeline(
+            cmds, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle
+        );
+        vkCmdBindDescriptorSets(
+            cmds, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout,
+            0, 1, &pipeline.descriptorSet,
+            0, nullptr
+        );
+        if (font.sampler.handle != VK_NULL_HANDLE) {
+            updateCombinedImageSampler(
+                vk.device, pipeline.descriptorSet, 1, &font.sampler, 1
+            );
+        }
+        updateUniformBuffer(vk.device, pipeline.descriptorSet, 0, vk.uniforms.handle);
+
+        RENDERER_GET(mesh, meshes, brush.info.meshName);
+        if ((mesh.indexCount == 0) || (mesh.vertexCount == 0)) continue;
+
+        VulkanMesh& vkMesh = meshesToFree.emplace_back();
+        uploadMesh(
+            vk,
+            mesh.vertices.data(), sizeof(mesh.vertices[0]) * mesh.vertices.size(),
+            mesh.indices.data(), sizeof(mesh.indices[0]) * mesh.indices.size(),
+            vkMesh
+        );
+        VkDeviceSize offsets[] = {0};
+        vkCmdBindVertexBuffers(cmds, 0, 1, &vkMesh.vBuff.handle, offsets);
+        vkCmdBindIndexBuffer(cmds, vkMesh.iBuff.handle, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmds, mesh.indices.size(), 1, 0, 0, 0);
+    }
+
+    vkCmdEndRenderPass(cmds);
+    endCommandBuffer(cmds);
+
+    // Submit.
+    VkSubmitInfo submitInfo = {};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmds;
+    submitInfo.waitSemaphoreCount = 1;
+    submitInfo.pWaitSemaphores = &vk.swap.imageReady;
+    VkPipelineStageFlags waitStages[] = {
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+    };
+    submitInfo.pWaitDstStageMask = waitStages;
+    submitInfo.signalSemaphoreCount = 1;
+    submitInfo.pSignalSemaphores = &vk.swap.cmdBufferDone;
+    vkQueueSubmit(vk.queue, 1, &submitInfo, VK_NULL_HANDLE);
+
+    // Present.
+    VkPresentInfoKHR presentInfo = {};
+    presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    presentInfo.swapchainCount = 1;
+    presentInfo.pSwapchains = &vk.swap.handle;
+    presentInfo.waitSemaphoreCount = 1;
+    presentInfo.pWaitSemaphores = &vk.swap.cmdBufferDone;
+    presentInfo.pImageIndices = &swapImageIndex;
+    VKCHECK(vkQueuePresentKHR(vk.queue, &presentInfo))
+
+    // PERF(jan): This is potentially slow.
+    vkQueueWaitIdle(vk.queue);
+
+    // Cleanup.
+    for (auto& mesh: meshesToFree) {
+        destroyMesh(vk, mesh);
+    }
+    if (font.isDirty) packFont(font);
+}
+
+// ************************************************************
+// * INIT: Everything required to set up Vulkan pipelines &c. *
+// ************************************************************
+
+void init(Vulkan& vk, Renderer& renderer) {
+    for (const FontInfo& info: fontInfo) {
+        INFO("Loading font '%s'...", info.name);
+
+        Font font = {
+            .info = info,
+            .ttfFileContents = readFile(info.path),
+        };
+
+        RENDERER_PUT(font, fonts, info.name);
+    }
+
+    for (const MeshInfo& info: meshInfo) {
+        INFO("Creating mesh '%s'...", info.name);
+
+        Mesh mesh = {
+            .info = info,
+            // TODO(jan): Calculate this from mesh metadata.
+            .vertexSizeInFloats = 8
+        };
+
+        RENDERER_PUT(mesh, meshes, info.name);
+    }
+
+    for (const PipelineInfo& info: pipelineInfo) {
+        INFO("Creating pipeline '%s'...", info.name);
+
+        VulkanPipeline pipeline = {};
+        initVKPipeline(vk, info, pipeline);
+
+        RENDERER_PUT(pipeline, pipelines, info.name);
+    }
+
+    for (const BrushInfo& info: brushInfo) {
+        INFO("Creating brush '%s'...", info.name);
+
+        Brush brush = {
+            .info = info,
+        };
+
+        renderer.brushes.insert({ info.name, brush });
     }
 }
 
-LRESULT
+// **********************************
+// * WIN32: Windows specific stuff. *
+// **********************************
+
+// Derived from https://github.com/cmuratori/refterm/blob/main/refterm_example_source_buffer.c
+Console initConsole(size_t bufferSize) {
+    Console result = {};
+
+    SYSTEM_INFO info;
+    GetSystemInfo(&info);
+    if (!isPowerOfTwo(info.dwAllocationGranularity)) {
+        FATAL("system allocation size is not a power of two");
+    }
+
+    bufferSize = ((bufferSize / info.dwAllocationGranularity) + 1) * info.dwAllocationGranularity;
+    if (bufferSize % info.dwAllocationGranularity != 0) {
+        FATAL("invalid buffer size");
+    }
+
+    HANDLE section = CreateFileMapping(
+        INVALID_HANDLE_VALUE,
+        NULL,
+        PAGE_READWRITE,
+        (DWORD)(bufferSize >> 32),
+        (DWORD)(bufferSize & 0xffffffff),
+        NULL
+    );
+
+    void* ringBuffer = nullptr;
+    // NOTE(jan): Try to find two consecutive memory areas to map the section twice back-to-back.
+    for(size_t offset =   0x40000000;
+               offset <  0x400000000;
+               offset +=   0x1000000) {
+        void *view1 = MapViewOfFileEx(section, FILE_MAP_ALL_ACCESS, 0, 0, bufferSize, (void *)offset);
+        void *view2 = MapViewOfFileEx(section, FILE_MAP_ALL_ACCESS, 0, 0, bufferSize, byteOffset(offset, bufferSize));
+
+        if(view1 && view2) {
+            ringBuffer = view1;
+            break;
+        }
+
+        if(view1) UnmapViewOfFile(view1);
+        if(view2) UnmapViewOfFile(view2);
+    }
+
+    if (!ringBuffer) {
+        FATAL("could not allocate ringbuffer");
+    }
+
+    result.data = ringBuffer;
+    result.size = bufferSize;
+    result.top = 0;
+    result.bottom = 0;
+    result.lines.max = MAX_SCROLLBACK_LINES;
+    return result;
+}
+
+LRESULT __stdcall
 WindowProc(
     HWND    window,
     UINT    message,
@@ -68,61 +872,77 @@ WindowProc(
     LPARAM  lParam
 ) {
     switch (message) {
-        case WM_DESTROY:
+        case WM_DESTROY: {
             PostQuitMessage(0);
             break;
-        case WM_KEYDOWN:
-            if (wParam == VK_ESCAPE) PostQuitMessage(0);
-            else keyboard[(uint16_t)wParam] = true;
+        } case WM_KEYDOWN: {
+            BOOL repeatFlag = (HIWORD(lParam) & KF_REPEAT) == KF_REPEAT;
+            switch (wParam) {
+                case VK_ESCAPE: PostQuitMessage(0); break;
+                case VK_PRIOR: input.consolePageUp = true; break;
+                case VK_NEXT: input.consolePageDown = true; break;
+                case VK_RETURN: input.consoleNewLine = true; break;
+                case VK_F1: input.consoleToggle = true; break;
+            }
             break;
-        case WM_KEYUP:
-            keyboard[(uint16_t)wParam] = false;
+        } case WM_KEYUP: {
+            switch (wParam) {
+                case VK_F1: input.consoleToggle = false; break;
+                case VK_PRIOR: input.consolePageUp = false; break;
+                case VK_NEXT: input.consolePageDown = false; break;
+            }
             break;
+        } default: {
+            return DefWindowProc(window, message, wParam, lParam);
+        }
     }
-    return DefWindowProc(window, message, wParam, lParam);
+    return 0;
 }
 
-int
+int __stdcall
 WinMain(
     HINSTANCE instance,
     HINSTANCE prevInstance,
     LPSTR commandLine,
     int showCommand
 ) {
-    LOG(INFO) << "Starting...";
+    auto error = fopen_s(&logFile, "LOG", "w");
+    if (error) exit(-1);
+    console = initConsole(1 * 1024 * 1024);
+    console.show = true;
 
-    LARGE_INTEGER counterFrequency;
+    QueryPerformanceCounter(&counterEpoch);
     QueryPerformanceFrequency(&counterFrequency);
-    
+    INFO("Logging initialized.");
+
+    // Create Window.
     WNDCLASSEX windowClassProperties = {};
     windowClassProperties.cbSize = sizeof(windowClassProperties);
     windowClassProperties.style = CS_HREDRAW | CS_VREDRAW;
-    windowClassProperties.lpfnWndProc = WindowProc;
+    windowClassProperties.lpfnWndProc = (WNDPROC)WindowProc;
     windowClassProperties.hInstance = instance;
     windowClassProperties.lpszClassName = "MainWindowClass";
     ATOM windowClass = RegisterClassEx(&windowClassProperties);
     if (!windowClass) {
-        LOG(ERROR) << "could not create window class";
+        FATAL("could not create window class")
     }
-
     HWND window = CreateWindowEx(
         0,
         "MainWindowClass",
-        "Vk Mesh Shader Example",
+        "Vk",
         WS_POPUP | WS_VISIBLE,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
         WIDTH,
         HEIGHT,
-        NULL,
-        NULL,
+        nullptr,
+        nullptr,
         instance,
-        NULL
+        nullptr
     );
-    if (window == NULL) {
-        LOG(ERROR) << "could not create window";
+    if (window == nullptr) {
+        FATAL("could not create window")
     }
-
     SetWindowPos(
         window,
         HWND_TOP,
@@ -134,131 +954,67 @@ WinMain(
     );
     ShowCursor(FALSE);
 
-    Vulkan vk;
-    vk.extensions.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
+    // TODO(jan): Handle resize.
+    GetWindowRect(window, &windowRect);
+    windowWidth = windowRect.right - windowRect.left;
+    windowHeight = windowRect.bottom - windowRect.top;
+
+    // NOTE(jan): Create Vulkan instance..
+    vk.extensions.emplace_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
     createVKInstance(vk);
-    vk.swap.surface = getSurface(window, instance, vk.handle);
-    initVK(vk);
 
-    Uniforms uniforms = {};
-    renderInit(vk, uniforms);
-
+    // NOTE(jan): Get a surface for Vulkan.
     {
-        FILE* save;
-        auto err = fopen_s(&save, "save.dat", "r");
-        if (!err) {
-            fread(&uniforms.eye, sizeof(uniforms.eye), 1, save);
-            fread(&uniforms.rotation, sizeof(uniforms.rotation), 1, save);
-            fclose(save);
+        VkSurfaceKHR surface;
+
+        VkWin32SurfaceCreateInfoKHR createInfo = {};
+        createInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
+        createInfo.hinstance = instance;
+        createInfo.hwnd = window;
+
+        auto result = vkCreateWin32SurfaceKHR(
+            vk.handle,
+            &createInfo,
+            nullptr,
+            &surface
+        );
+
+        if (result != VK_SUCCESS) {
+            throw runtime_error("could not create win32 surface");
         }
+        vk.swap.surface = surface;
     }
 
-    DirectInput directInput(instance);
-    Controller* controller = directInput.controller;
-    Mouse* mouse = directInput.mouse;
+    // Initialize the rest of Vulkan.
+    initVK(vk);
 
-    LARGE_INTEGER epoch = {};
-    QueryPerformanceCounter(&epoch);
+    // Load shaders, meshes, fonts, textures, and other resources.
+    Renderer renderer;
+    init(vk, renderer);
 
-    LARGE_INTEGER frameStart = {}, frameEnd = {};
-    int64_t frameDelta = {};
-    float fps = 0;
-    float frameTime = 0;
-
-    int errorCode = 0;
-
-    BOOL done = false;
+    // NOTE(jan): Main loop.
+    bool done = false;
     while (!done) {
+        // NOTE(jan): Pump WIN32 message queue.
         MSG msg;
-        BOOL messageAvailable; 
-        do {
+        BOOL messageAvailable;
+        while(true) {
             messageAvailable = PeekMessage(
                 &msg,
                 (HWND)nullptr,
                 0, 0,
                 PM_REMOVE
             );
-            TranslateMessage(&msg); 
+            if (!messageAvailable) break;
+            TranslateMessage(&msg);
             if (msg.message == WM_QUIT) {
                 done = true;
-                errorCode = (int)msg.wParam;
             }
-            DispatchMessage(&msg); 
-        } while(!done && messageAvailable);
-
-        if (!done) {
-            char debugString[1024];
-            snprintf(debugString, 1024, "%.2f FPS", fps);
-
-            QueryPerformanceCounter(&frameStart);
-                updateUniforms(vk, &uniforms, sizeof(uniforms));
-                renderFrame(vk, debugString);
-            QueryPerformanceCounter(&frameEnd);
-            frameDelta = frameEnd.QuadPart - frameStart.QuadPart;
-            frameTime = (float)frameDelta / counterFrequency.QuadPart;
-            fps = counterFrequency.QuadPart / (float)frameDelta;
-
-            float deltaMove = DELTA_MOVE_PER_S * frameTime;
-            if (keyboard['W']) {
-                eventMoveForward(deltaMove, uniforms);
-            }
-            if (keyboard['S']) {
-                eventMoveBackward(deltaMove, uniforms);
-            }
-            if (keyboard['A']) {
-                eventMoveLeft(deltaMove, uniforms);
-            }
-            if (keyboard['D']) {
-                eventMoveRight(deltaMove, uniforms);
-            }
-            if (keyboard['F']) {
-                SetWindowPos(
-                    window,
-                    HWND_TOP,
-                    0,
-                    0,
-                    WIDTH,
-                    HEIGHT,
-                    SWP_FRAMECHANGED
-                );
-            }
-            if (keyboard['R']) {
-                eventPositionReset(uniforms);
-            }
-
-            auto mouseDelta = mouse->getDelta();
-            auto mouseDeltaX = mouseDelta.x * MOUSE_SENSITIVITY;
-            auto mouseDeltaY = mouseDelta.y * MOUSE_SENSITIVITY;
-
-            eventRotateX(mouseDeltaY, uniforms);
-            eventRotateY(mouseDeltaX, uniforms);
-
-            if (controller) {
-                auto state = controller->getState();
-
-                auto joyDeltaRotateX = state.rX * JOYSTICK_SENSITIVITY;
-                eventRotateY(joyDeltaRotateX, uniforms);
-
-                auto joyDeltaMove = deltaMove * JOYSTICK_SENSITIVITY;
-                auto joyDeltaMoveX = state.x * joyDeltaMove;
-                auto joyDeltaMoveY = -state.y * joyDeltaMove;
-                eventMoveRight(joyDeltaMoveX, uniforms);
-                eventMoveForward(joyDeltaMoveY, uniforms);
-            }
+            DispatchMessage(&msg);
         }
+
+        doFrame(vk, renderer);
     }
 
-    {
-        FILE* save;
-        auto err = fopen_s(&save, "save.dat", "w");
-        if (!err) {
-            fwrite(&uniforms.eye, sizeof(uniforms.eye), 1, save);
-            fwrite(&uniforms.rotation, sizeof(uniforms.rotation), 1, save);
-            fclose(save);
-        } else {
-            LOG(ERROR) << strerror(err);
-        }
-    }
-
-    return errorCode; 
+    return 0;
 }

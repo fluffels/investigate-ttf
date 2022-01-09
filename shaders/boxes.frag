@@ -9,6 +9,5 @@ layout(location=1) in vec4 inRGBA;
 layout(location=0) out vec4 outColor;
 
 void main() {
-    float alpha = texture(colorMap, inUV).r;
-    outColor = vec4(inRGBA.rgb, inRGBA.a * alpha);
+    outColor = inRGBA;
 }
