@@ -18,6 +18,7 @@
 #include "String.cpp"
 #include "MathLib.cpp"
 #include "FileSystem.cpp"
+#include "TTF.cpp"
 #include "Vulkan.cpp"
 #include <vulkan/vulkan_win32.h>
 
@@ -814,6 +815,8 @@ WinMain(
     // Load shaders, meshes, fonts, textures, and other resources.
     Renderer renderer;
     init(vk, renderer);
+
+    TTFLoadFromPath("fonts/AzeretMono-Medium.ttf");
 
     // NOTE(jan): Main loop.
     bool done = false;
