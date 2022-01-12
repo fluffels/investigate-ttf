@@ -204,6 +204,7 @@ struct Renderer {
 // ***********
 
 MemoryArena globalArena;
+MemoryArena tempArena;
 
 Input input;
 
@@ -816,7 +817,12 @@ WinMain(
     Renderer renderer;
     init(vk, renderer);
 
-    TTFLoadFromPath("fonts/AzeretMono-Medium.ttf");
+    TTFFile ttfFile = {};
+    if (!TTFLoadFromPath("fonts/AzeretMono-Medium.ttf", &globalArena, ttfFile)) {
+        ERR("could not load TTF");
+    } else {
+        if (!TTFLoadGlyph(ttfFile, 0, &tempArena)) ERR("could not load glyph");
+    }
 
     // NOTE(jan): Main loop.
     bool done = false;
