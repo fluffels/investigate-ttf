@@ -477,7 +477,7 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
     TTFFile ttfFile = {};
     TTFGlyph glyph = {};
     bool glyphLoaded = TTFLoadFromPath("fonts/AzeretMono-Medium.ttf", &frameArena, ttfFile) &&
-                       TTFLoadGlyph(ttfFile, 0, &frameArena, &frameArena, glyph);
+                       TTFLoadCodepoint(ttfFile, 'A', &frameArena, &frameArena, glyph);
     if (!glyphLoaded) {
         ERR("could not load TTF");
     } else {
@@ -490,8 +490,8 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
         AABox centeredBox = {
             .x0 = glyph.bbox.x0 - glyph.bbox.x0 + screenOffset.x,
             .x1 = glyph.bbox.x1 - glyph.bbox.x0 + screenOffset.x,
-            .y0 = glyph.bbox.y0 - glyph.bbox.y0 + screenOffset.y,
-            .y1 = glyph.bbox.y1 - glyph.bbox.y0 + screenOffset.y,
+            .y0 = (windowHeight - screenOffset.y) - glyph.bbox.y0 - glyph.bbox.y0,
+            .y1 = (windowHeight - screenOffset.y) - glyph.bbox.y1 - glyph.bbox.y0,
         };
         pushAABox(boxes, centeredBox, base03);
 
@@ -499,7 +499,7 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
             const Vec2i glyphPoint = glyph.points[pointIndex];
             const Vec2 screenPoint = {
                 .x = glyphPoint.x - glyph.bbox.x0 + screenOffset.x,
-                .y = glyphPoint.y - glyph.bbox.y0 + screenOffset.y
+                .y = (windowHeight - screenOffset.y) - glyphPoint.y - glyph.bbox.y0,
             };
             AABox pointBox = {
                 .x0 = screenPoint.x - 5,

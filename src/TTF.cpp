@@ -2,10 +2,7 @@
 
 #include <map>
 #include <string>
-#include <urlmon.h>
-#include <vcruntime_string.h>
 #include <vector>
-#include <wtypes.h>
 
 #include "Logging.cpp"
 #include "FileSystem.cpp"
@@ -330,4 +327,75 @@ TTFLoadGlyph(TTFFile& file, u32 index, MemoryArena* tempArena, MemoryArena* aren
 
     file.position = oldPosition;
     return true;
+}
+
+bool
+TTFLoadCodepoint(TTFFile& file, u32 codepoint, MemoryArena* tempArena, MemoryArena* arena, TTFGlyph& result) {
+    TTFSeekToTableOrFail("cmap")
+    u16 version = TTFReadU16(file);
+    u16 subtableCount = TTFReadU16(file);
+
+    s32 unicodeSubtableOffset = -1;
+    for (int subtableIndex = 0; subtableIndex < subtableCount; subtableIndex++) {
+        u16 platformID = TTFReadU16(file);
+        u16 platformSpecificID = TTFReadU16(file);
+        u32 offset = TTFReadU32(file);
+
+        if (platformID == 0) {
+            unicodeSubtableOffset = offset;
+        }
+    }
+
+    if (unicodeSubtableOffset == -1) return false;
+
+    TTFSeekToTableOrFail("cmap")
+    TTFFileAdvance(file, unicodeSubtableOffset);
+    u16 format = TTFReadU16(file);
+    if (format != 4) {
+        ERR("only format 4 cmap tables are supported");
+        return false;
+    }
+    u16 length = TTFReadU16(file);
+    u16 language = TTFReadU16(file);
+    u16 segCount = TTFReadU16(file) / 2;
+    u16 searchRange = TTFReadU16(file);
+    u16 entrySelector = TTFReadU16(file);
+    u16 rangeShift = TTFReadU16(file);
+
+    u16* endCodes = (u16*)memoryArenaAllocate(tempArena, sizeof(u16) * segCount);
+    for (int segmentIndex = 0; segmentIndex < segCount; segmentIndex++) endCodes[segmentIndex] = TTFReadU16(file);
+
+    u16 reservedPad = TTFReadU16(file);
+
+    u16* startCodes = (u16*)memoryArenaAllocate(tempArena, sizeof(u16) * segCount);
+    for (int segmentIndex = 0; segmentIndex < segCount; segmentIndex++) startCodes[segmentIndex] = TTFReadU16(file);
+
+    u16* idDeltas = (u16*)memoryArenaAllocate(tempArena, sizeof(u16) * segCount);
+    for (int segmentIndex = 0; segmentIndex < segCount; segmentIndex++) idDeltas[segmentIndex] = TTFReadU16(file);
+
+    u16* idRangeOffsets = (u16*)memoryArenaAllocate(tempArena, sizeof(u16) * segCount);
+    for (int segmentIndex = 0; segmentIndex < segCount; segmentIndex++) idRangeOffsets[segmentIndex] = TTFReadU16(file);
+
+    u16 segmentIndex = 0;
+    while (segmentIndex < segCount) {
+        u16 endCode = endCodes[segmentIndex];
+        if (endCode > codepoint) break;
+        segmentIndex++;
+    }
+    u16 idRangeOffset = idRangeOffsets[segmentIndex];
+    u16 idDelta = idDeltas[segmentIndex];
+
+    umm glyphIndex;
+    if (idRangeOffset == 0) {
+        glyphIndex = idDelta + codepoint;
+    } else {
+        u16 startCode = startCodes[segmentIndex];
+
+        umm glyphIndexOffset = idRangeOffset + sizeof(u16) * (codepoint - startCode) - sizeof(u16) * (segCount - segmentIndex);
+
+        TTFFileAdvance(file, glyphIndexOffset);
+        glyphIndex = idDelta + TTFReadU16(file);
+    }
+
+    return TTFLoadGlyph(file, glyphIndex, tempArena, arena, result);
 }
