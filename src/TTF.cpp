@@ -69,6 +69,14 @@ struct TTFFile {
     TTFHeader header;
 };
 
+struct TTFGlyph {
+    AABox bbox;
+    u16 contourCount;
+    u16* contourEnds;
+    u16 pointCount;
+    Vec2i* points;
+};
+
 inline void
 TTFFileSeek(TTFFile& file, u32 offset) {
     if (offset >= file.length) {
@@ -175,78 +183,38 @@ TTFLoadFromPath(const char* path, MemoryArena* arena, TTFFile& file) {
 
     // NOTE(jan): Parse offset table
     file.offsetTable.scalarType = TTFReadU32(file);
-    // INFO("sfnt type: %u", file.offsetTable.scalarType);
     file.offsetTable.tableCount = TTFReadU16(file);
-    // INFO("table count: %u", file.offsetTable.tableCount);
     file.offsetTable.searchRange = TTFReadU16(file);
-    // INFO("search range: %u", file.offsetTable.searchRange);
     file.offsetTable.entrySelector = TTFReadU16(file);
-    // INFO("entry selector: %u", file.offsetTable.entrySelector);
     file.offsetTable.rangeShift = TTFReadU16(file);
-    // INFO("range shift: %u", file.offsetTable.rangeShift);
 
     // NOTE(jan): Parse 'head' table
     TTFSeekToTableOrFail("head")
-
     file.header.version = TTFReadFixed(file);
-    INFO("version: %f", file.header.version);
-    
     file.header.fontRevision = TTFReadFixed(file);
-    INFO("fontRevision: %f", file.header.fontRevision);
-
     file.header.checksumAdjust = TTFReadU32(file);
-    INFO("checksumAdjust: %u", file.header.checksumAdjust);
-
     file.header.magicNumber = TTFReadU32(file);
-    INFO("magicNumber: %x", file.header.magicNumber);
     if (file.header.magicNumber != 0x5F0F3CF5) {
         ERR("incorrect magic number");
     }
-
     file.header.flags = TTFReadU16(file);
-    INFO("flags: %u", file.header.flags);
-
     file.header.unitsPerEm = TTFReadU16(file);
-    INFO("unitsPerEm: %u", file.header.unitsPerEm);
-
     file.header.created = TTFReadTimeStamp(file);
-    INFO("created: %u", file.header.created);
-
     file.header.modified = TTFReadTimeStamp(file);
-    INFO("modified: %u", file.header.modified);
-
     file.header.minX = TTFReadS16(file);
-    INFO("minX: %d", file.header.minX);
-
     file.header.minY = TTFReadS16(file);
-    INFO("minY: %d", file.header.minY);
-
     file.header.maxX = TTFReadS16(file);
-    INFO("maxX: %d", file.header.maxX);
-
     file.header.maxY = TTFReadS16(file);
-    INFO("maxY: %d", file.header.maxY);
-
     file.header.macStyle = TTFReadU16(file);
-    INFO("macStyle: %u", file.header.macStyle);
-
     file.header.lowestRecPPEM = TTFReadU16(file);
-    INFO("lowestRecPPEM: %u", file.header.lowestRecPPEM);
-
     file.header.fontDirectionHint = TTFReadS16(file);
-    INFO("fontDirectionHint: %d", file.header.fontDirectionHint);
-
     file.header.indexToLocFormat = TTFReadS16(file);
-    INFO("indexToLocFormat: %d", file.header.indexToLocFormat);
-
     file.header.glyphDataFormat = TTFReadS16(file);
-    INFO("glyphDataFormat: %d", file.header.glyphDataFormat);
-
     return true;
 }
 
 bool
-TTFLoadGlyph(TTFFile& file, u32 index, MemoryArena* tempArena) {
+TTFLoadGlyph(TTFFile& file, u32 index, MemoryArena* tempArena, MemoryArena* arena, TTFGlyph& result) {
     umm oldPosition = file.position;
 
     TTFSeekToTableOrFail("loca")
@@ -262,11 +230,7 @@ TTFLoadGlyph(TTFFile& file, u32 index, MemoryArena* tempArena) {
     TTFSeekToTableOrFail("glyf")
     TTFFileAdvance(file, offsetInGlyphTable);
     s16 contourCount = TTFReadS16(file);
-    if (contourCount < -1) {
-        ERR("invalid contour count");
-        return false;
-    }
-    if (contourCount == -1) {
+    if (contourCount < 0) {
         ERR("compound glyphs not supported");
         return false;
     }
@@ -274,21 +238,15 @@ TTFLoadGlyph(TTFFile& file, u32 index, MemoryArena* tempArena) {
         ERR("glyph is empty");
         return false;
     }
-    INFO("contourCount: %d", contourCount);
     s16 minX = TTFReadS16(file);
-    INFO("minX: %d", minX);
     s16 minY = TTFReadS16(file);
-    INFO("minY: %d", minY);
     s16 maxX = TTFReadS16(file);
-    INFO("maxX: %d", maxX);
     s16 maxY = TTFReadS16(file);
-    INFO("maxY: %d", maxY);
 
-    u16* contourEnds = (u16*)memoryArenaAllocate(tempArena, sizeof(u16) * contourCount);
+    u16* contourEnds = (u16*)memoryArenaAllocate(arena, sizeof(u16) * contourCount);
     for (int contourIndex = 0; contourIndex < contourCount; contourIndex++) {
         contourEnds[contourIndex] = TTFReadU16(file);
     }
-    INFO("contourEnds:     %5d %5d %5d %5d", contourEnds[0], contourEnds[1], contourEnds[2], contourEnds[3]);
 
     u16 instructionLength = TTFReadU16(file);
     TTFFileAdvance(file, instructionLength);
@@ -298,7 +256,6 @@ TTFLoadGlyph(TTFFile& file, u32 index, MemoryArena* tempArena) {
         pointCount = max(pointCount, contourEnds[i]);
     }
     pointCount++;
-    INFO("pointCount: %d", pointCount);
 
     u8* flags = (u8*)memoryArenaAllocate(tempArena, sizeof(u8) * pointCount);
     memset(flags, 0, sizeof(u8) * pointCount);
@@ -314,9 +271,8 @@ TTFLoadGlyph(TTFFile& file, u32 index, MemoryArena* tempArena) {
             repeatCount--;
         }
     }
-    INFO("flags:           %5d %5d %5d %5d %5d", flags[0], flags[1], flags[2], flags[3], flags[4]);
 
-    Vec2i* points = (Vec2i*)memoryArenaAllocate(tempArena, sizeof(Vec2i) * pointCount);
+    Vec2i* points = (Vec2i*)memoryArenaAllocate(arena, sizeof(Vec2i) * pointCount);
     memset(points, 0, sizeof(Vec2i) * pointCount);
 
     {
@@ -363,14 +319,14 @@ TTFLoadGlyph(TTFFile& file, u32 index, MemoryArena* tempArena) {
         }
     }
 
-    INFO("points.x:        %5d %5d %5d %5d %5d", points[0].x, points[1].x, points[2].x, points[3].x, points[4].x);
-    for (int i = 0; i < pointCount; i++) {
-        INFO("point[%d].x: %d", i, points[i].x);
-    }
-    INFO("points.y:        %5d %5d %5d %5d %5d", points[0].y, points[1].y, points[2].y, points[3].y, points[4].y);
-    for (int i = 0; i < pointCount; i++) {
-        INFO("point[%d].y: %d", i, points[i].y);
-    }
+    result.bbox.x0 = minX;
+    result.bbox.x1 = maxX;
+    result.bbox.y0 = minY;
+    result.bbox.y1 = maxY;
+    result.contourCount = contourCount;
+    result.contourEnds = contourEnds;
+    result.pointCount = pointCount;
+    result.points = points;
 
     file.position = oldPosition;
     return true;

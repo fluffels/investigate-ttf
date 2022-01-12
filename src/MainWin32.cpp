@@ -36,13 +36,6 @@ inline int max(int a, int b) {
     return (a > b) ? (a) : (b);
 }
 
-struct AABox {
-    f32 x0;
-    f32 x1;
-    f32 y0;
-    f32 y1;
-};
-
 // ******
 // * UI *
 // ******
@@ -212,10 +205,17 @@ RECT windowRect;
 f32 windowWidth;
 f32 windowHeight;
 
+#define COLOUR_FROM_HEX(name, r, g, b) Vec4 name = { .x = r/255.f, .y = g/255.f, .z = b/255.f, .w = 1.f }
+
 Vulkan vk;
 Vec4 base03 = { .x =      0.f, .y =  43/255.f, .z =  54/255.f, .w = 1.f };
 Vec4 base01 = { .x = 88/255.f, .y = 110/255.f, .z = 117/255.f, .w = 1.f };
 Vec4 white =  { .x =      1.f, .y =       1.f, .z =       1.f, .w = 1.f };
+COLOUR_FROM_HEX(base00,  0x62, 0x62, 0x62);
+COLOUR_FROM_HEX(base02,  0x07, 0x36, 0x42);
+COLOUR_FROM_HEX(magenta, 0xd3, 0x36, 0x82);
+COLOUR_FROM_HEX(green,   0x85, 0x99, 0x00);
+COLOUR_FROM_HEX(cyan,    0x2a, 0xa1, 0x98);
 
 // **************************
 // * FONT: Font management. *
@@ -424,6 +424,8 @@ pushText(Mesh& mesh, Font& font, AABox& box, String text, Vec4 color) {
 void doFrame(Vulkan& vk, Renderer& renderer) {
     f32 frameStart = getElapsed();
 
+    MemoryArena frameArena = {};
+
     // NOTE(jan): Acquire swap image.
     uint32_t swapImageIndex = 0;
     auto result = vkAcquireNextImageKHR(
@@ -472,6 +474,43 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
         input.consoleNewLine = false;
     }
 
+    TTFFile ttfFile = {};
+    TTFGlyph glyph = {};
+    bool glyphLoaded = TTFLoadFromPath("fonts/AzeretMono-Medium.ttf", &frameArena, ttfFile) &&
+                       TTFLoadGlyph(ttfFile, 0, &frameArena, &frameArena, glyph);
+    if (!glyphLoaded) {
+        ERR("could not load TTF");
+    } else {
+        const float glyphWidth = glyph.bbox.x1 - glyph.bbox.x0;
+        const float glyphHeight = glyph.bbox.y1 - glyph.bbox.y0;
+        const Vec2 screenOffset = {
+            .x = (windowWidth - glyphWidth) / 2.f,
+            .y = (windowHeight - glyphHeight) / 2.f,
+        };
+        AABox centeredBox = {
+            .x0 = glyph.bbox.x0 - glyph.bbox.x0 + screenOffset.x,
+            .x1 = glyph.bbox.x1 - glyph.bbox.x0 + screenOffset.x,
+            .y0 = glyph.bbox.y0 - glyph.bbox.y0 + screenOffset.y,
+            .y1 = glyph.bbox.y1 - glyph.bbox.y0 + screenOffset.y,
+        };
+        pushAABox(boxes, centeredBox, base03);
+
+        for (int pointIndex = 0; pointIndex < glyph.pointCount; pointIndex++) {
+            const Vec2i glyphPoint = glyph.points[pointIndex];
+            const Vec2 screenPoint = {
+                .x = glyphPoint.x - glyph.bbox.x0 + screenOffset.x,
+                .y = glyphPoint.y - glyph.bbox.y0 + screenOffset.y
+            };
+            AABox pointBox = {
+                .x0 = screenPoint.x - 5,
+                .x1 = screenPoint.x + 5,
+                .y0 = screenPoint.y - 5,
+                .y1 = screenPoint.y + 5,
+            };
+            pushAABox(boxes, pointBox, base00);
+        }
+    }
+
     if (console.show) {
         // NOTE(jan): Building mesh for console.
         AABox backgroundBox = {
@@ -480,7 +519,7 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
             .y0 = 0.f,
             .y1 = windowHeight / 2.f
         };
-        pushAABox(boxes, backgroundBox, base03);
+        pushAABox(boxes, backgroundBox, base02);
 
         // NOTE(jan): Building mesh for console prompt.
         const f32 margin = font.info.size / 2.f;
@@ -545,7 +584,10 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
 
     // NOTE(jan): Clear colour / depth.
     VkClearValue colorClear;
-    colorClear.color = {1.f, 0.f, 1.f, 1.f};
+    colorClear.color.float32[0] = 0.f;
+    colorClear.color.float32[1] = 0.f;
+    colorClear.color.float32[2] = 0.f;
+    colorClear.color.float32[3] = 1.f;
     VkClearValue depthClear;
     depthClear.depthStencil = {1.f, 0};
     VkClearValue clears[] = {colorClear, depthClear};
@@ -635,6 +677,8 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
         destroyMesh(vk, mesh);
     }
     if (font.isDirty) packFont(font);
+
+    memoryArenaClear(&frameArena);
 }
 
 // ************************************************************
@@ -816,13 +860,6 @@ WinMain(
     // Load shaders, meshes, fonts, textures, and other resources.
     Renderer renderer;
     init(vk, renderer);
-
-    TTFFile ttfFile = {};
-    if (!TTFLoadFromPath("fonts/AzeretMono-Medium.ttf", &globalArena, ttfFile)) {
-        ERR("could not load TTF");
-    } else {
-        if (!TTFLoadGlyph(ttfFile, 0, &tempArena)) ERR("could not load glyph");
-    }
 
     // NOTE(jan): Main loop.
     bool done = false;
