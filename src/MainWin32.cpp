@@ -597,7 +597,7 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
         // NOTE(jan): Push lines.
         int pointIndex = 0;
         int contourIndex = 0;
-        while (contourIndex < 1) {//glyph.contourCount) {
+        while (contourIndex < glyph.contourCount) {
             u16 contourEnd = glyph.contourEnds[contourIndex];
             Vec2 firstPoint = glyph.points[pointIndex];
 
@@ -624,8 +624,7 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
         contourIndex = 0;
         // NOTE(jan): Should this be outside?
         Vec2 p0 = { .x = 0, .y = 0 };
-        while (contourIndex < 1) {
-        // while (contourIndex < glyph.contourCount) {
+        while (contourIndex < glyph.contourCount) {
             u16 contourEnd = glyph.contourEnds[contourIndex];
             if (contourEnd - pointIndex + 1 < 2) {
                 pointIndex = contourEnd;
