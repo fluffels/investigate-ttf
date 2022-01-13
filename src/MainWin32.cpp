@@ -344,7 +344,7 @@ pushTriangle(Mesh& mesh, Vec2& p0, Vec2& p1, Vec2& p2) {
     mesh.indices.push_back(baseIndex);
     mesh.indices.push_back(baseIndex+1);
     mesh.indices.push_back(baseIndex+2);
-    mesh.indexCount++;
+    mesh.indexCount += 3;
 }
 
 void
@@ -624,6 +624,9 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
         contourIndex = 0;
         // NOTE(jan): Should this be outside?
         Vec2 p0 = { .x = 0, .y = 0 };
+        #define xToStencil(n) ((n) - glyph.bbox.x0)
+        #define yToStencil(n) (glyphHeight - glyph.bbox.y0 - (n))
+        #define vecToStencil(new, old) Vec2 new = Vec2 { .x = xToStencil(old.x), .y = yToStencil(old.y) }
         while (contourIndex < glyph.contourCount) {
             u16 contourEnd = glyph.contourEnds[contourIndex];
             if (contourEnd - pointIndex + 1 < 2) {
@@ -631,20 +634,24 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
                 continue;
             }
             Vec2 firstPoint = glyph.points[pointIndex];
+            vecToStencil(firstPointStencil, firstPoint);
 
             umm i1 = pointIndex++;
             while (pointIndex <= contourEnd) {
                 umm i2 = pointIndex++;
 
                 Vec2 p1 = glyph.points[i1];
+                vecToStencil(p1Stencil, p1);
                 Vec2 p2 = glyph.points[i2];
-                pushTriangle(contours, p0, p1, p2);
+                vecToStencil(p2Stencil, p2);
+                pushTriangle(contours, p0, p1Stencil, p2Stencil);
 
                 i1 = i2;
             }
 
             Vec2 lastPoint = glyph.points[contourEnd];
-            pushTriangle(contours, p0, firstPoint, lastPoint);
+            vecToStencil(lastPointStencil, lastPoint);
+            pushTriangle(contours, p0, firstPointStencil, lastPointStencil);
 
             contourIndex++;
         }
@@ -804,7 +811,11 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
         VkDeviceSize offsets[] = {0};
         vkCmdBindVertexBuffers(cmds, 0, 1, &vkMesh.vBuff.handle, offsets);
         vkCmdBindIndexBuffer(cmds, vkMesh.iBuff.handle, 0, VK_INDEX_TYPE_UINT32);
-        vkCmdDrawIndexed(cmds, mesh.indices.size(), 1, 0, 0, 0);
+
+        for (int i = 0; i < mesh.indices.size() / 3; i++) {
+            vkCmdDrawIndexed(cmds, 3, 1, i*3, 0, 0);
+        }
+        // vkCmdDrawIndexed(cmds, mesh.indices.size(), 1, 0, 0, 0);
 
         vkCmdEndRenderPass(cmds);
         endCommandBuffer(cmds);
