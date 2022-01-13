@@ -1,4 +1,5 @@
 #include "Vulkan.h"
+#include "vulkan/vulkan_core.h"
 #pragma warning (disable: 4267)
 #pragma warning (disable: 4996)
 
@@ -119,6 +120,9 @@ MeshInfo meshInfo[] = {
     {
         .name = "text",
     },
+    {
+        .name = "lines",
+    },
 };
 
 PipelineInfo pipelineInfo[] = {
@@ -129,7 +133,7 @@ PipelineInfo pipelineInfo[] = {
         .clockwiseWinding = true,
         .cullBackFaces = false,
         .depthEnabled = false,
-        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
     },
     {
         .name = "boxes",
@@ -138,8 +142,15 @@ PipelineInfo pipelineInfo[] = {
         .clockwiseWinding = true,
         .cullBackFaces = false,
         .depthEnabled = false,
-        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
-    }
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+    },
+    {
+        .name = "lines",
+        .vertexShaderPath = "shaders/ortho_xy_rgba.vert.spv",
+        .fragmentShaderPath = "shaders/lines.frag.spv",
+        .depthEnabled = false,
+        .topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST,
+    },
 };
 
 struct BrushInfo {
@@ -170,7 +181,12 @@ BrushInfo brushInfo[] = {
         .name = "boxes",
         .meshName = "boxes",
         .pipelineName = "boxes"
-    }
+    },
+    {
+        .name = "lines",
+        .meshName = "lines",
+        .pipelineName = "lines",
+    },
 };
 
 struct Renderer {
@@ -266,6 +282,31 @@ packFont(Font& font) {
 // ***********************************************
 // * FRAME: Everything required to draw a frame. *
 // ***********************************************
+
+void
+pushLine(Mesh& mesh, Vec2& start, Vec2& end, Vec4& color) {
+    umm baseIndex = mesh.vertexCount;
+
+    mesh.vertices.push_back(start.x);
+    mesh.vertices.push_back(start.y);
+    mesh.vertices.push_back(color.x);
+    mesh.vertices.push_back(color.y);
+    mesh.vertices.push_back(color.z);
+    mesh.vertices.push_back(color.w);
+    mesh.vertexCount++;
+
+    mesh.vertices.push_back(end.x);
+    mesh.vertices.push_back(end.y);
+    mesh.vertices.push_back(color.x);
+    mesh.vertices.push_back(color.y);
+    mesh.vertices.push_back(color.z);
+    mesh.vertices.push_back(color.w);
+    mesh.vertexCount++;
+
+    mesh.indices.push_back(baseIndex);
+    mesh.indices.push_back(baseIndex+1);
+    mesh.indexCount++;
+}
 
 void
 pushAABox(Mesh& mesh, AABox& box, AABox& tex, Vec4& color) {
@@ -462,6 +503,7 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
     }
 
     RENDERER_GET(boxes, meshes, "boxes");
+    RENDERER_GET(lines, meshes, "lines");
     RENDERER_GET(text, meshes, "text");
     RENDERER_GET(font, fonts, "default");
 
@@ -487,20 +529,20 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
             .x = (windowWidth - glyphWidth) / 2.f,
             .y = (windowHeight - glyphHeight) / 2.f,
         };
+        #define xToScreen(n) ((n) - glyph.bbox.x0 + screenOffset.x)
+        #define yToScreen(n) ((windowHeight - screenOffset.y) - glyph.bbox.y0 - (n))
         AABox centeredBox = {
-            .x0 = glyph.bbox.x0 - glyph.bbox.x0 + screenOffset.x,
-            .x1 = glyph.bbox.x1 - glyph.bbox.x0 + screenOffset.x,
-            .y0 = (windowHeight - screenOffset.y) - glyph.bbox.y0 - glyph.bbox.y0,
-            .y1 = (windowHeight - screenOffset.y) - glyph.bbox.y1 - glyph.bbox.y0,
+            .x0 = xToScreen(glyph.bbox.x0),
+            .x1 = xToScreen(glyph.bbox.x1),
+            .y0 = yToScreen(glyph.bbox.y0),
+            .y1 = yToScreen(glyph.bbox.y1),
         };
         pushAABox(boxes, centeredBox, base03);
 
+        #define vecToScreen(new, old) Vec2 new = Vec2 { .x = xToScreen(old.x), .y = yToScreen(old.y) }
         for (int pointIndex = 0; pointIndex < glyph.pointCount; pointIndex++) {
-            const Vec2i glyphPoint = glyph.points[pointIndex];
-            const Vec2 screenPoint = {
-                .x = glyphPoint.x - glyph.bbox.x0 + screenOffset.x,
-                .y = (windowHeight - screenOffset.y) - glyphPoint.y - glyph.bbox.y0,
-            };
+            const Vec2 glyphPoint = glyph.points[pointIndex];
+            vecToScreen(screenPoint, glyphPoint);
             AABox pointBox = {
                 .x0 = screenPoint.x - 5,
                 .x1 = screenPoint.x + 5,
@@ -508,6 +550,30 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
                 .y1 = screenPoint.y + 5,
             };
             pushAABox(boxes, pointBox, base00);
+        }
+
+        int pointIndex = 0;
+        int contourIndex = 0;
+        while (contourIndex < 2) { //glyph.contourCount) {
+            u16 contourEnd = glyph.contourEnds[contourIndex];
+            Vec2 firstPoint = glyph.points[pointIndex];
+
+            while (pointIndex < contourEnd) {
+                Vec2 point = glyph.points[pointIndex];
+                vecToScreen(screenPoint, point);
+                Vec2 nextPoint = glyph.points[pointIndex+1];
+                vecToScreen(screenNextPoint, nextPoint);
+                pushLine(lines, screenPoint, screenNextPoint, base00);
+                pointIndex++;
+            }
+
+            Vec2 lastPoint = glyph.points[pointIndex];
+            vecToScreen(screenFirstPoint, firstPoint);
+            vecToScreen(screenLastPoint, lastPoint);
+            pushLine(lines, screenFirstPoint, screenLastPoint, base00);
+
+            pointIndex++;
+            contourIndex++;
         }
     }
 

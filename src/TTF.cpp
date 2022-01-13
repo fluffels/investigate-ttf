@@ -71,7 +71,7 @@ struct TTFGlyph {
     u16 contourCount;
     u16* contourEnds;
     u16 pointCount;
-    Vec2i* points;
+    Vec2* points;
 };
 
 inline void
@@ -269,8 +269,8 @@ TTFLoadGlyph(TTFFile& file, u32 index, MemoryArena* tempArena, MemoryArena* aren
         }
     }
 
-    Vec2i* points = (Vec2i*)memoryArenaAllocate(arena, sizeof(Vec2i) * pointCount);
-    memset(points, 0, sizeof(Vec2i) * pointCount);
+    Vec2* points = (Vec2*)memoryArenaAllocate(arena, sizeof(Vec2) * pointCount);
+    memset(points, 0, sizeof(Vec2) * pointCount);
 
     {
         int pointIndex = 0;
@@ -288,7 +288,7 @@ TTFLoadGlyph(TTFFile& file, u32 index, MemoryArena* tempArena, MemoryArena* aren
                     x += TTFReadS16(file);
                 }
             }
-            Vec2i* point = points + pointIndex;
+            Vec2* point = points + pointIndex;
             point->x = x;
             pointIndex++;
         }
@@ -310,7 +310,7 @@ TTFLoadGlyph(TTFFile& file, u32 index, MemoryArena* tempArena, MemoryArena* aren
                     y += TTFReadS16(file);
                 }
             }
-            Vec2i* point = points + pointIndex;
+            Vec2* point = points + pointIndex;
             point->y = y;
             pointIndex++;
         }
