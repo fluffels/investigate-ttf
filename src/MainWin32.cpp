@@ -1,4 +1,3 @@
-#include "Vulkan.h"
 #include "vulkan/vulkan_core.h"
 #pragma warning (disable: 4267)
 #pragma warning (disable: 4996)
@@ -118,6 +117,9 @@ MeshInfo meshInfo[] = {
         .name = "boxes",
     },
     {
+        .name = "contours",
+    },
+    {
         .name = "text",
     },
     {
@@ -151,6 +153,15 @@ PipelineInfo pipelineInfo[] = {
         .depthEnabled = false,
         .topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST,
     },
+    {
+        .name = "stencil",
+        .vertexShaderPath = "shaders/ortho_xy.vert.spv",
+        .fragmentShaderPath = "shaders/white.frag.spv",
+        .cullBackFaces = false,
+        .depthEnabled = false,
+        .stencilEnabled = true,
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+    },
 };
 
 struct BrushInfo {
@@ -158,6 +169,7 @@ struct BrushInfo {
     const char* meshName;
     const char* pipelineName;
     vector<UniformInfo> uniforms;
+    bool disabled;
 };
 
 struct Brush {
@@ -165,6 +177,11 @@ struct Brush {
 };
 
 BrushInfo brushInfo[] = {
+    {
+        .name = "triangles",
+        .meshName = "contours",
+        .pipelineName = "stencil"
+    },
     {
         .name = "text",
         .meshName = "text",
@@ -305,6 +322,28 @@ pushLine(Mesh& mesh, Vec2& start, Vec2& end, Vec4& color) {
 
     mesh.indices.push_back(baseIndex);
     mesh.indices.push_back(baseIndex+1);
+    mesh.indexCount++;
+}
+
+void
+pushTriangle(Mesh& mesh, Vec2& p0, Vec2& p1, Vec2& p2) {
+    umm baseIndex = mesh.vertexCount;
+
+    mesh.vertices.push_back(p0.x);
+    mesh.vertices.push_back(p0.y);
+    mesh.vertexCount++;
+
+    mesh.vertices.push_back(p1.x);
+    mesh.vertices.push_back(p1.y);
+    mesh.vertexCount++;
+
+    mesh.vertices.push_back(p2.x);
+    mesh.vertices.push_back(p2.y);
+    mesh.vertexCount++;
+
+    mesh.indices.push_back(baseIndex);
+    mesh.indices.push_back(baseIndex+1);
+    mesh.indices.push_back(baseIndex+2);
     mesh.indexCount++;
 }
 
@@ -504,8 +543,11 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
 
     RENDERER_GET(boxes, meshes, "boxes");
     RENDERER_GET(lines, meshes, "lines");
+    RENDERER_GET(contours, meshes, "contours");
     RENDERER_GET(text, meshes, "text");
     RENDERER_GET(font, fonts, "default");
+
+    std::vector<VulkanMesh> meshesToFree;
 
     if (input.consoleToggle) {
         console.show = !console.show;
@@ -552,9 +594,10 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
             pushAABox(boxes, pointBox, base00);
         }
 
+        // NOTE(jan): Push lines.
         int pointIndex = 0;
         int contourIndex = 0;
-        while (contourIndex < 2) { //glyph.contourCount) {
+        while (contourIndex < 1) {//glyph.contourCount) {
             u16 contourEnd = glyph.contourEnds[contourIndex];
             Vec2 firstPoint = glyph.points[pointIndex];
 
@@ -575,6 +618,208 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
             pointIndex++;
             contourIndex++;
         }
+
+        // NOTE(jan): Push contours.
+        pointIndex = 0;
+        contourIndex = 0;
+        // NOTE(jan): Should this be outside?
+        Vec2 p0 = { .x = 0, .y = 0 };
+        while (contourIndex < 1) {
+        // while (contourIndex < glyph.contourCount) {
+            u16 contourEnd = glyph.contourEnds[contourIndex];
+            if (contourEnd - pointIndex + 1 < 2) {
+                pointIndex = contourEnd;
+                continue;
+            }
+            Vec2 firstPoint = glyph.points[pointIndex];
+
+            umm i1 = pointIndex++;
+            while (pointIndex <= contourEnd) {
+                umm i2 = pointIndex++;
+
+                Vec2 p1 = glyph.points[i1];
+                Vec2 p2 = glyph.points[i2];
+                pushTriangle(contours, p0, p1, p2);
+
+                i1 = i2;
+            }
+
+            Vec2 lastPoint = glyph.points[contourEnd];
+            pushTriangle(contours, p0, firstPoint, lastPoint);
+
+            contourIndex++;
+        }
+
+        // NOTE(jan): Render to stencil buffer.
+        VkExtent2D stencilExtent = {
+            .width = (u32)ceilf(glyphWidth),
+            .height = (u32)ceilf(glyphHeight),
+        };
+        VulkanImage colorImage = {};
+        createVulkanImage(
+            vk.device,
+            vk.memories,
+            VK_IMAGE_TYPE_2D,
+            VK_IMAGE_VIEW_TYPE_2D,
+            stencilExtent,
+            1,
+            vk.queueFamily,
+            VK_FORMAT_R8G8B8A8_SRGB,
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            false,
+            0,
+            vk.sampleCountFlagBits,
+            colorImage
+        );
+        VulkanImage stencilImage = {};
+        createVulkanImage(
+            vk.device,
+            vk.memories,
+            VK_IMAGE_TYPE_2D,
+            VK_IMAGE_VIEW_TYPE_2D,
+            stencilExtent,
+            1,
+            vk.queueFamily,
+            VK_FORMAT_S8_UINT,
+            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+            VK_IMAGE_ASPECT_STENCIL_BIT,
+            false,
+            0,
+            vk.sampleCountFlagBits,
+            stencilImage
+        );
+
+        VkRenderPass renderPass = {};
+        {
+            VkAttachmentReference attachmentRefs[] = {
+                {
+                    .attachment = 0,
+                    .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                },
+                {
+                    .attachment = 1,
+                    .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                }
+            };
+
+            VkAttachmentDescription attachmentDescs[] = {
+                {
+                    .format = VK_FORMAT_R8G8B8A8_SRGB,
+                    .samples = vk.sampleCountFlagBits,
+                    .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                    .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                    .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                    .finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                },
+                {
+                    .format = VK_FORMAT_S8_UINT,
+                    .samples = vk.sampleCountFlagBits,
+                    .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                    .stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE,
+                    .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                    .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                },
+            };
+
+            VkSubpassDescription subpass = {
+                .colorAttachmentCount = 1,
+                .pColorAttachments = attachmentRefs,
+                .pDepthStencilAttachment = attachmentRefs + 1,
+            };
+
+            VkRenderPassCreateInfo info = {
+                .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+                .attachmentCount = 2,
+                .pAttachments = attachmentDescs,
+                .subpassCount = 1,
+                .pSubpasses = &subpass,
+            };
+
+            auto result = vkCreateRenderPass(vk.device, &info, nullptr, &renderPass);
+            VKCHECK(result);
+        }
+
+        VkFramebuffer framebuffer = {};
+        {
+            VkImageView attachments[] = { colorImage.view, stencilImage.view };
+            VkFramebufferCreateInfo info = {
+                .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+                .renderPass = renderPass,
+                .attachmentCount = 2,
+                .pAttachments = attachments,
+                .width = stencilExtent.width,
+                .height = stencilExtent.height,
+                .layers = 1,
+            };
+            auto result = vkCreateFramebuffer(vk.device, &info, nullptr, &framebuffer);
+        }
+
+        VkCommandBuffer cmds = {};
+        createCommandBuffers(vk.device, vk.cmdPool, 1, &cmds);
+        beginFrameCommandBuffer(cmds);
+
+        {
+            VkClearValue colorClear;
+            colorClear.color = {0.f, 0.f, 0.f, 0.f};
+            VkClearValue depthClear;
+            depthClear.depthStencil = {1.f, 0};
+            VkClearValue clears[] = { colorClear, depthClear };
+
+            VkOffset2D renderOffset = {
+                .x = 0,
+                .y = 0
+            };
+            VkRect2D renderArea = {
+                .offset = renderOffset,
+                .extent = stencilExtent,
+            };
+            VkRenderPassBeginInfo info = {
+                .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+                .renderPass = renderPass,
+                .framebuffer = framebuffer,
+                .renderArea = renderArea,
+                .clearValueCount = 2,
+                .pClearValues = clears,
+            };
+            vkCmdBeginRenderPass(cmds, &info, VK_SUBPASS_CONTENTS_INLINE);
+        }
+
+        RENDERER_GET(pipelineTemplate, pipelines, "stencil");
+        RENDERER_GET(mesh, meshes, "contours");
+
+        // TODO(jan): This is a hack. We need a better way of constructing pipelines.
+        VulkanPipeline pipeline = {};
+        initVKPipeline(vk, pipelineTemplate.options, pipeline, &renderPass);
+
+        vkCmdBindPipeline(cmds, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle);
+        vkCmdBindDescriptorSets(cmds, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout, 0, 1, &pipeline.descriptorSet, 0, nullptr);
+        updateUniformBuffer(vk.device, pipeline.descriptorSet, 0, vk.uniforms.handle);
+        VulkanMesh& vkMesh = meshesToFree.emplace_back();
+        uploadMesh(
+            vk,
+            mesh.vertices.data(), sizeof(mesh.vertices[0]) * mesh.vertices.size(),
+            mesh.indices.data(), sizeof(mesh.indices[0]) * mesh.indices.size(),
+            vkMesh
+        );
+        VkDeviceSize offsets[] = {0};
+        vkCmdBindVertexBuffers(cmds, 0, 1, &vkMesh.vBuff.handle, offsets);
+        vkCmdBindIndexBuffer(cmds, vkMesh.iBuff.handle, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmds, mesh.indices.size(), 1, 0, 0, 0);
+
+        vkCmdEndRenderPass(cmds);
+        endCommandBuffer(cmds);
+
+        {
+            VkSubmitInfo info = {
+                .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                .commandBufferCount = 1,
+                .pCommandBuffers = &cmds,
+            };
+            vkQueueSubmit(vk.queue, 1, &info, VK_NULL_HANDLE);
+        }
+
+        vkQueueWaitIdle(vk.queue);
     }
 
     if (console.show) {
@@ -667,8 +912,6 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
     beginInfo.renderArea.extent = vk.swap.extent;
     beginInfo.renderArea.offset = {0, 0};
     beginInfo.renderPass = vk.renderPass;
-
-    std::vector<VulkanMesh> meshesToFree;
 
     vkCmdBeginRenderPass(cmds, &beginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
