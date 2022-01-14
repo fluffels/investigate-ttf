@@ -1,3 +1,4 @@
+#include "Vulkan.h"
 #include "vulkan/vulkan_core.h"
 #pragma warning (disable: 4267)
 #pragma warning (disable: 4996)
@@ -114,9 +115,6 @@ struct UniformInfo {
 
 MeshInfo meshInfo[] = {
     {
-        .name = "boxes",
-    },
-    {
         .name = "contours",
     },
     {
@@ -125,6 +123,12 @@ MeshInfo meshInfo[] = {
     {
         .name = "lines",
     },
+    {
+        .name = "console",
+    },
+    {
+        .name = "glyph_boxes"
+    }
 };
 
 PipelineInfo pipelineInfo[] = {
@@ -140,7 +144,7 @@ PipelineInfo pipelineInfo[] = {
     {
         .name = "boxes",
         .vertexShaderPath = "shaders/ortho_xy_uv_rgba.vert.spv",
-        .fragmentShaderPath = "shaders/boxes.frag.spv",
+        .fragmentShaderPath = "shaders/rgba.frag.spv",
         .clockwiseWinding = true,
         .cullBackFaces = false,
         .depthEnabled = false,
@@ -152,15 +156,6 @@ PipelineInfo pipelineInfo[] = {
         .fragmentShaderPath = "shaders/lines.frag.spv",
         .depthEnabled = false,
         .topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST,
-    },
-    {
-        .name = "stencil",
-        .vertexShaderPath = "shaders/ortho_xy.vert.spv",
-        .fragmentShaderPath = "shaders/white.frag.spv",
-        .cullBackFaces = false,
-        .depthEnabled = false,
-        .stencilEnabled = true,
-        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
     },
 };
 
@@ -195,8 +190,13 @@ BrushInfo brushInfo[] = {
         },
     },
     {
-        .name = "boxes",
-        .meshName = "boxes",
+        .name = "glyph_boxes",
+        .meshName = "glyph_boxes",
+        .pipelineName = "boxes"
+    },
+    {
+        .name = "console",
+        .meshName = "console",
         .pipelineName = "boxes"
     },
     {
@@ -250,55 +250,9 @@ COLOUR_FROM_HEX(magenta, 0xd3, 0x36, 0x82);
 COLOUR_FROM_HEX(green,   0x85, 0x99, 0x00);
 COLOUR_FROM_HEX(cyan,    0x2a, 0xa1, 0x98);
 
-// **************************
-// * FONT: Font management. *
-// **************************
-
-void
-packFont(Font& font) {
-    INFO("Packing %llu codepoints", font.codepointsToLoad.size());
-
-    font.bitmapSideLength = 512;
-    umm bitmapSize = font.bitmapSideLength * font.bitmapSideLength;
-    u8* bitmap = new u8[font.bitmapSideLength * font.bitmapSideLength];
-
-    stbtt_pack_context ctxt = {};
-    stbtt_PackBegin(&ctxt, bitmap, font.bitmapSideLength, font.bitmapSideLength, 0, 1, NULL);
-
-    for (u32 codepoint: font.codepointsToLoad) {
-        if (font.failedCodepoints.contains(codepoint)) continue;
-
-        stbtt_packedchar cdata;
-        int result = stbtt_PackFontRange(
-            &ctxt,
-            (u8*)font.ttfFileContents.data(), 0,
-            font.info.size,
-            codepoint, 1,
-            &cdata
-        );
-        if (!result) {
-            INFO("Could not load codepoint %u", codepoint);
-            font.failedCodepoints.insert(codepoint);
-        } else {
-            font.dataForCodepoint[codepoint] = cdata;
-        }
-    }
-
-    stbtt_PackEnd(&ctxt);
-
-    if (font.sampler.handle != VK_NULL_HANDLE) {
-        destroySampler(vk, font.sampler);
-    }
-
-    uploadTexture(vk, font.bitmapSideLength, font.bitmapSideLength, VK_FORMAT_R8_UNORM, bitmap, bitmapSize, font.sampler);
-    delete[] bitmap;
-
-    font.isDirty = false;
-}
-
-// ***********************************************
-// * FRAME: Everything required to draw a frame. *
-// ***********************************************
+// ******************************
+// * GEOM: Geometry management. *
+// ******************************
 
 void
 pushLine(Mesh& mesh, Vec2& start, Vec2& end, Vec4& color) {
@@ -501,127 +455,73 @@ pushText(Mesh& mesh, Font& font, AABox& box, String text, Vec4 color) {
     return result;
 }
 
-void doFrame(Vulkan& vk, Renderer& renderer) {
-    f32 frameStart = getElapsed();
+// **************************
+// * FONT: Font management. *
+// **************************
 
-    MemoryArena frameArena = {};
+void
+packFont(Font& font) {
+    INFO("Packing %llu codepoints", font.codepointsToLoad.size());
 
-    // NOTE(jan): Acquire swap image.
-    uint32_t swapImageIndex = 0;
-    auto result = vkAcquireNextImageKHR(
-        vk.device,
-        vk.swap.handle,
-        std::numeric_limits<uint64_t>::max(),
-        vk.swap.imageReady,
-        VK_NULL_HANDLE,
-        &swapImageIndex
-    );
-    if ((result == VK_SUBOPTIMAL_KHR) ||
-        (result == VK_ERROR_OUT_OF_DATE_KHR)) {
-        // TODO(jan): Implement resize.
-        FATAL("could not acquire next image")
-    } else if (result != VK_SUCCESS) {
-        FATAL("could not acquire next image")
+    font.bitmapSideLength = 512;
+    umm bitmapSize = font.bitmapSideLength * font.bitmapSideLength;
+    u8* bitmap = new u8[font.bitmapSideLength * font.bitmapSideLength];
+
+    stbtt_pack_context ctxt = {};
+    stbtt_PackBegin(&ctxt, bitmap, font.bitmapSideLength, font.bitmapSideLength, 0, 1, NULL);
+
+    for (u32 codepoint: font.codepointsToLoad) {
+        if (font.failedCodepoints.contains(codepoint)) continue;
+
+        stbtt_packedchar cdata;
+        int result = stbtt_PackFontRange(
+            &ctxt,
+            (u8*)font.ttfFileContents.data(), 0,
+            font.info.size,
+            codepoint, 1,
+            &cdata
+        );
+        if (!result) {
+            INFO("Could not load codepoint %u", codepoint);
+            font.failedCodepoints.insert(codepoint);
+        } else {
+            font.dataForCodepoint[codepoint] = cdata;
+        }
     }
 
-    // NOTE(jan): Calculate uniforms (projection matrix &c).
-    Uniforms uniforms;
+    stbtt_PackEnd(&ctxt);
 
-    matrixInit(uniforms.ortho);
-    matrixOrtho(windowWidth, windowHeight, uniforms.ortho);
-
-    updateUniforms(vk, &uniforms, sizeof(Uniforms));
-
-    // NOTE(jan): Meshes are cleared and recalculated each frame.
-    for (auto& pair: renderer.meshes) {
-        Mesh& mesh = pair.second;
-        mesh.indexCount = 0;
-        mesh.indices.clear();
-        mesh.vertexCount = 0;
-        mesh.vertices.clear();
+    if (font.sampler.handle != VK_NULL_HANDLE) {
+        destroySampler(vk, font.sampler);
     }
 
-    RENDERER_GET(boxes, meshes, "boxes");
-    RENDERER_GET(lines, meshes, "lines");
-    RENDERER_GET(contours, meshes, "contours");
-    RENDERER_GET(text, meshes, "text");
-    RENDERER_GET(font, fonts, "default");
+    uploadTexture(vk, font.bitmapSideLength, font.bitmapSideLength, VK_FORMAT_R8_UNORM, bitmap, bitmapSize, font.sampler);
+    delete[] bitmap;
 
-    std::vector<VulkanMesh> meshesToFree;
+    font.isDirty = false;
+}
 
-    if (input.consoleToggle) {
-        console.show = !console.show;
-        input.consoleToggle = false;
-    }
-    if (input.consoleNewLine) {
-        logRaw("> ");
-        input.consoleNewLine = false;
-    }
+void renderIcon() {
+    MemoryArena tempArena = {};
 
     TTFFile ttfFile = {};
     TTFGlyph glyph = {};
-    bool glyphLoaded = TTFLoadFromPath("fonts/AzeretMono-Medium.ttf", &frameArena, ttfFile) &&
-                       TTFLoadCodepoint(ttfFile, 'A', &frameArena, &frameArena, glyph);
+    bool glyphLoaded = TTFLoadFromPath("fonts/AzeretMono-Medium.ttf", &globalArena, ttfFile) &&
+                       TTFLoadCodepoint(ttfFile, 'A', &tempArena, &globalArena, glyph);
     if (!glyphLoaded) {
         ERR("could not load TTF");
-    } else {
-        const float glyphWidth = glyph.bbox.x1 - glyph.bbox.x0;
-        const float glyphHeight = glyph.bbox.y1 - glyph.bbox.y0;
-        const Vec2 screenOffset = {
-            .x = (windowWidth - glyphWidth) / 2.f,
-            .y = (windowHeight - glyphHeight) / 2.f,
-        };
-        #define xToScreen(n) ((n) - glyph.bbox.x0 + screenOffset.x)
-        #define yToScreen(n) ((windowHeight - screenOffset.y) - glyph.bbox.y0 - (n))
-        AABox centeredBox = {
-            .x0 = xToScreen(glyph.bbox.x0),
-            .x1 = xToScreen(glyph.bbox.x1),
-            .y0 = yToScreen(glyph.bbox.y0),
-            .y1 = yToScreen(glyph.bbox.y1),
-        };
-        pushAABox(boxes, centeredBox, base03);
+        return;
+    }
 
-        #define vecToScreen(new, old) Vec2 new = Vec2 { .x = xToScreen(old.x), .y = yToScreen(old.y) }
-        for (int pointIndex = 0; pointIndex < glyph.pointCount; pointIndex++) {
-            const Vec2 glyphPoint = glyph.points[pointIndex];
-            vecToScreen(screenPoint, glyphPoint);
-            AABox pointBox = {
-                .x0 = screenPoint.x - 5,
-                .x1 = screenPoint.x + 5,
-                .y0 = screenPoint.y - 5,
-                .y1 = screenPoint.y + 5,
-            };
-            pushAABox(boxes, pointBox, base00);
-        }
+    const float glyphWidth = glyph.bbox.x1 - glyph.bbox.x0;
+    const float glyphHeight = glyph.bbox.y1 - glyph.bbox.y0;
 
-        // NOTE(jan): Push lines.
-        int pointIndex = 0;
-        int contourIndex = 0;
-        while (contourIndex < glyph.contourCount) {
-            u16 contourEnd = glyph.contourEnds[contourIndex];
-            Vec2 firstPoint = glyph.points[pointIndex];
-
-            while (pointIndex < contourEnd) {
-                Vec2 point = glyph.points[pointIndex];
-                vecToScreen(screenPoint, point);
-                Vec2 nextPoint = glyph.points[pointIndex+1];
-                vecToScreen(screenNextPoint, nextPoint);
-                pushLine(lines, screenPoint, screenNextPoint, base00);
-                pointIndex++;
-            }
-
-            Vec2 lastPoint = glyph.points[pointIndex];
-            vecToScreen(screenFirstPoint, firstPoint);
-            vecToScreen(screenLastPoint, lastPoint);
-            pushLine(lines, screenFirstPoint, screenLastPoint, base00);
-
-            pointIndex++;
-            contourIndex++;
-        }
-
-        // NOTE(jan): Push contours.
-        pointIndex = 0;
-        contourIndex = 0;
+    // NOTE(jan): Push contour mesh.
+    Mesh contourMesh = {};
+    VulkanMesh contourVKMesh = {};
+    {
+        u16 pointIndex = 0;
+        u16 contourIndex = 0;
         // NOTE(jan): Should this be outside?
         Vec2 p0 = { .x = 0, .y = 0 };
         #define xToStencil(n) ((n) - glyph.bbox.x0)
@@ -644,20 +544,31 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
                 vecToStencil(p1Stencil, p1);
                 Vec2 p2 = glyph.points[i2];
                 vecToStencil(p2Stencil, p2);
-                pushTriangle(contours, p0, p1Stencil, p2Stencil);
+                pushTriangle(contourMesh, p0, p1Stencil, p2Stencil);
 
                 i1 = i2;
             }
 
             Vec2 lastPoint = glyph.points[contourEnd];
             vecToStencil(lastPointStencil, lastPoint);
-            pushTriangle(contours, p0, firstPointStencil, lastPointStencil);
+            pushTriangle(contourMesh, p0, firstPointStencil, lastPointStencil);
 
             contourIndex++;
         }
 
+        uploadMesh(
+            vk,
+            contourMesh.vertices.data(), sizeof(contourMesh.vertices[0]) * contourMesh.vertices.size(),
+            contourMesh.indices.data(), sizeof(contourMesh.indices[0]) * contourMesh.indices.size(),
+            contourVKMesh
+        );
+    }
+
+    VulkanImage stencilImage = {};
+    VkExtent2D stencilExtent = {};
+    {
         // NOTE(jan): Render to stencil buffer.
-        VkExtent2D stencilExtent = {
+        stencilExtent = {
             .width = (u32)ceilf(glyphWidth),
             .height = (u32)ceilf(glyphHeight),
         };
@@ -678,7 +589,6 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
             vk.sampleCountFlagBits,
             colorImage
         );
-        VulkanImage stencilImage = {};
         createVulkanImage(
             vk.device,
             vk.memories,
@@ -791,28 +701,45 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
             vkCmdBeginRenderPass(cmds, &info, VK_SUBPASS_CONTENTS_INLINE);
         }
 
-        RENDERER_GET(pipelineTemplate, pipelines, "stencil");
-        RENDERER_GET(mesh, meshes, "contours");
+        VulkanPipeline pipeline;
+        {
+            PipelineInfo info = {
+                .name = "icon_stencil",
+                .vertexShaderPath = "shaders/ortho_xy.vert.spv",
+                .fragmentShaderPath = "shaders/white.frag.spv",
+                .clockwiseWinding = true,
+                .cullBackFaces = false,
+                .depthEnabled = false,
+                .writeStencilInvert = true,
+                .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+            };
+            initVKPipeline(vk, info, pipeline, &renderPass);
+        }
 
-        // TODO(jan): This is a hack. We need a better way of constructing pipelines.
-        VulkanPipeline pipeline = {};
-        initVKPipeline(vk, pipelineTemplate.options, pipeline, &renderPass);
+        float ortho[16];
+        matrixInit(ortho);
+        // TODO(jan): matrixOrtho(glyphWidth, glyphHeight, ortho);
+        matrixOrtho(windowWidth, windowHeight, ortho);
+
+        // TODO(jan): Destroy.
+        VulkanBuffer uniformBuffer;
+        createUniformBuffer(vk.device, vk.memories, vk.queueFamily, sizeof(ortho), uniformBuffer);
+        updateBuffer(vk, uniformBuffer, ortho, sizeof(ortho));
+
+        updateUniformBuffer(vk.device, pipeline.descriptorSet, 0, uniformBuffer.handle);
 
         vkCmdBindPipeline(cmds, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle);
-        vkCmdBindDescriptorSets(cmds, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout, 0, 1, &pipeline.descriptorSet, 0, nullptr);
-        updateUniformBuffer(vk.device, pipeline.descriptorSet, 0, vk.uniforms.handle);
-        VulkanMesh& vkMesh = meshesToFree.emplace_back();
-        uploadMesh(
-            vk,
-            mesh.vertices.data(), sizeof(mesh.vertices[0]) * mesh.vertices.size(),
-            mesh.indices.data(), sizeof(mesh.indices[0]) * mesh.indices.size(),
-            vkMesh
+        vkCmdBindDescriptorSets(
+            cmds, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout,
+            0, 1, &pipeline.descriptorSet,
+            0, nullptr
         );
-        VkDeviceSize offsets[] = {0};
-        vkCmdBindVertexBuffers(cmds, 0, 1, &vkMesh.vBuff.handle, offsets);
-        vkCmdBindIndexBuffer(cmds, vkMesh.iBuff.handle, 0, VK_INDEX_TYPE_UINT32);
 
-        for (int i = 0; i < mesh.indices.size() / 3; i++) {
+        VkDeviceSize offsets[] = {0};
+        vkCmdBindVertexBuffers(cmds, 0, 1, &contourVKMesh.vBuff.handle, offsets);
+        vkCmdBindIndexBuffer(cmds, contourVKMesh.iBuff.handle, 0, VK_INDEX_TYPE_UINT32);
+
+        for (int i = 0; i < contourMesh.indices.size() / 3; i++) {
             vkCmdDrawIndexed(cmds, 3, 1, i*3, 0, 0);
         }
         // vkCmdDrawIndexed(cmds, mesh.indices.size(), 1, 0, 0, 0);
@@ -830,6 +757,297 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
         }
 
         vkQueueWaitIdle(vk.queue);
+
+        // TODO(jan): Destroy meshes / colour image(?).
+    }
+
+    // NOTE(jan): Render glyph to texture.
+    VulkanImage glyphTexture = {};
+    {
+        VkFormat format = VK_FORMAT_R8G8B8A8_SRGB;
+        createVulkanImage(
+            vk.device,
+            vk.memories,
+            VK_IMAGE_TYPE_2D,
+            VK_IMAGE_VIEW_TYPE_2D,
+            stencilExtent,
+            1,
+            vk.queueFamily,
+            format,
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            false,
+            0,
+            vk.sampleCountFlagBits,
+            glyphTexture
+        );
+        VkRenderPass renderPass = {};
+        {
+            VkAttachmentDescription attachmentDescs[] = {
+                {
+                    .format = format,
+                    .samples = vk.sampleCountFlagBits,
+                    .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                    .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                    .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                    .finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                },
+                {
+                    .format = VK_FORMAT_S8_UINT,
+                    .samples = vk.sampleCountFlagBits,
+                    .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+                    .stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE,
+                    .initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                    .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                },
+            };
+            VkAttachmentReference attachmentRefs[] = {
+                {
+                    .attachment = 0,
+                    .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                },
+                {
+                    .attachment = 1,
+                    .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                },
+            };
+            VkSubpassDescription subpass = {
+                .colorAttachmentCount = 1,
+                .pColorAttachments = attachmentRefs,
+                .pDepthStencilAttachment = attachmentRefs + 1,
+            };
+            VkRenderPassCreateInfo info = {
+                .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+                .attachmentCount = 2,
+                .pAttachments = attachmentDescs,
+                .subpassCount = 1,
+                .pSubpasses = &subpass
+            };
+            auto result = vkCreateRenderPass(vk.device, &info, nullptr, &renderPass);
+            VKCHECK(result);
+        }
+
+        VkFramebuffer framebuffer = {};
+        {
+            VkImageView attachments[] = { glyphTexture.view, stencilImage.view };
+            VkFramebufferCreateInfo info = {
+                .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+                .renderPass = renderPass,
+                .attachmentCount = 2,
+                .pAttachments = attachments,
+                .width = stencilExtent.width,
+                .height = stencilExtent.height,
+                .layers = 1,
+            };
+            auto result = vkCreateFramebuffer(vk.device, &info, nullptr, &framebuffer);
+            VKCHECK(result);
+        }
+
+        Mesh mesh = {};
+        {
+            AABox wholeTexture = {
+                .x0 = -1,
+                .x1 = 1,
+                .y0 = -1,
+                .y1 = 1
+            };
+            pushAABox(mesh, wholeTexture, white);
+        }
+        VulkanMesh vkMesh;
+        uploadMesh(
+            vk,
+            mesh.vertices.data(), sizeof(mesh.vertices[0]) * mesh.vertices.size(),
+            mesh.indices.data(), sizeof(mesh.indices[0]) * mesh.indices.size(),
+            vkMesh
+        );
+
+        VulkanPipeline pipeline;
+        {
+            PipelineInfo info = {
+                .name = "glyph_texture",
+                .vertexShaderPath = "shaders/passthrough_xy_uv_rgba.vert.spv",
+                .fragmentShaderPath = "shaders/rgba.frag.spv",
+                .clockwiseWinding = true,
+                .cullBackFaces = false,
+                .depthEnabled = false,
+                .readStencil = true,
+                .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+            };
+            initVKPipeline(vk, info, pipeline, &renderPass);
+        }
+
+        VkCommandBuffer cmds = VK_NULL_HANDLE;
+        createCommandBuffers(vk.device, vk.cmdPool, 1, &cmds);
+        beginFrameCommandBuffer(cmds);
+
+        {
+            VkClearValue clear = {};
+            clear.color = {};
+            VkOffset2D renderOffset = {
+                .x = 0,
+                .y = 0
+            };
+            VkRect2D renderArea = {
+                .offset = renderOffset,
+                .extent = stencilExtent
+            };
+            VkRenderPassBeginInfo info = {
+                .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+                .renderPass = renderPass,
+                .framebuffer = framebuffer,
+                .renderArea = renderArea,
+                .clearValueCount = 1,
+                .pClearValues = &clear,
+            };
+            vkCmdBeginRenderPass(cmds, &info, VK_SUBPASS_CONTENTS_INLINE);
+        }
+
+        vkCmdBindPipeline(cmds, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle);
+        VkDeviceSize offsets[] = {0};
+        vkCmdBindVertexBuffers(cmds, 0, 1, &vkMesh.vBuff.handle, offsets);
+        vkCmdBindIndexBuffer(cmds, vkMesh.iBuff.handle, 0, VK_INDEX_TYPE_UINT32);
+
+        vkCmdDrawIndexed(cmds, mesh.indexCount, 1, 0, 0, 0);
+
+        vkCmdEndRenderPass(cmds);
+        endCommandBuffer(cmds);
+
+        {
+            VkSubmitInfo info = {
+                .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                .commandBufferCount = 1,
+                .pCommandBuffers = &cmds
+            };
+            auto result = vkQueueSubmit(vk.queue, 1, &info, VK_NULL_HANDLE);
+            VKCHECK(result);
+        }
+
+        vkDeviceWaitIdle(vk.device);
+    }
+}
+
+// ***************************
+// * FRAME: Drawing a frame. *
+// ***************************
+
+void doFrame(Vulkan& vk, Renderer& renderer) {
+    f32 frameStart = getElapsed();
+
+    MemoryArena frameArena = {};
+
+    // NOTE(jan): Acquire swap image.
+    uint32_t swapImageIndex = 0;
+    auto result = vkAcquireNextImageKHR(
+        vk.device,
+        vk.swap.handle,
+        std::numeric_limits<uint64_t>::max(),
+        vk.swap.imageReady,
+        VK_NULL_HANDLE,
+        &swapImageIndex
+    );
+    if ((result == VK_SUBOPTIMAL_KHR) ||
+        (result == VK_ERROR_OUT_OF_DATE_KHR)) {
+        // TODO(jan): Implement resize.
+        FATAL("could not acquire next image")
+    } else if (result != VK_SUCCESS) {
+        FATAL("could not acquire next image")
+    }
+
+    // NOTE(jan): Calculate uniforms (projection matrix &c).
+    Uniforms uniforms;
+
+    matrixInit(uniforms.ortho);
+    matrixOrtho(windowWidth, windowHeight, uniforms.ortho);
+
+    updateUniforms(vk, &uniforms, sizeof(Uniforms));
+
+    // NOTE(jan): Meshes are cleared and recalculated each frame.
+    for (auto& pair: renderer.meshes) {
+        Mesh& mesh = pair.second;
+        mesh.indexCount = 0;
+        mesh.indices.clear();
+        mesh.vertexCount = 0;
+        mesh.vertices.clear();
+    }
+
+    RENDERER_GET(consoleMesh, meshes, "console");
+    RENDERER_GET(glyphBoxes, meshes, "glyph_boxes");
+    RENDERER_GET(lines, meshes, "lines");
+    RENDERER_GET(contours, meshes, "contours");
+    RENDERER_GET(text, meshes, "text");
+    RENDERER_GET(font, fonts, "default");
+
+    std::vector<VulkanMesh> meshesToFree;
+
+    if (input.consoleToggle) {
+        console.show = !console.show;
+        input.consoleToggle = false;
+    }
+    if (input.consoleNewLine) {
+        logRaw("> ");
+        input.consoleNewLine = false;
+    }
+
+    TTFFile ttfFile = {};
+    TTFGlyph glyph = {};
+    bool glyphLoaded = TTFLoadFromPath("fonts/AzeretMono-Medium.ttf", &frameArena, ttfFile) &&
+                       TTFLoadCodepoint(ttfFile, 'A', &frameArena, &frameArena, glyph);
+    if (!glyphLoaded) {
+        ERR("could not load TTF");
+    } else {
+        const float glyphWidth = glyph.bbox.x1 - glyph.bbox.x0;
+        const float glyphHeight = glyph.bbox.y1 - glyph.bbox.y0;
+        const Vec2 screenOffset = {
+            .x = (windowWidth - glyphWidth) / 2.f,
+            .y = (windowHeight - glyphHeight) / 2.f,
+        };
+        #define xToScreen(n) ((n) - glyph.bbox.x0 + screenOffset.x)
+        #define yToScreen(n) ((windowHeight - screenOffset.y) - glyph.bbox.y0 - (n))
+        AABox centeredBox = {
+            .x0 = xToScreen(glyph.bbox.x0),
+            .x1 = xToScreen(glyph.bbox.x1),
+            .y0 = yToScreen(glyph.bbox.y0),
+            .y1 = yToScreen(glyph.bbox.y1),
+        };
+        pushAABox(glyphBoxes, centeredBox, base03);
+
+        #define vecToScreen(new, old) Vec2 new = Vec2 { .x = xToScreen(old.x), .y = yToScreen(old.y) }
+        for (int pointIndex = 0; pointIndex < glyph.pointCount; pointIndex++) {
+            const Vec2 glyphPoint = glyph.points[pointIndex];
+            vecToScreen(screenPoint, glyphPoint);
+            AABox pointBox = {
+                .x0 = screenPoint.x - 5,
+                .x1 = screenPoint.x + 5,
+                .y0 = screenPoint.y - 5,
+                .y1 = screenPoint.y + 5,
+            };
+            pushAABox(glyphBoxes, pointBox, magenta);
+        }
+
+        // NOTE(jan): Push lines.
+        int pointIndex = 0;
+        int contourIndex = 0;
+        while (contourIndex < glyph.contourCount) {
+            u16 contourEnd = glyph.contourEnds[contourIndex];
+            Vec2 firstPoint = glyph.points[pointIndex];
+
+            while (pointIndex < contourEnd) {
+                Vec2 point = glyph.points[pointIndex];
+                vecToScreen(screenPoint, point);
+                Vec2 nextPoint = glyph.points[pointIndex+1];
+                vecToScreen(screenNextPoint, nextPoint);
+                pushLine(lines, screenPoint, screenNextPoint, green);
+                pointIndex++;
+            }
+
+            Vec2 lastPoint = glyph.points[pointIndex];
+            vecToScreen(screenFirstPoint, firstPoint);
+            vecToScreen(screenLastPoint, lastPoint);
+            pushLine(lines, screenFirstPoint, screenLastPoint, green);
+
+            pointIndex++;
+            contourIndex++;
+        }
     }
 
     if (console.show) {
@@ -840,7 +1058,7 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
             .y0 = 0.f,
             .y1 = windowHeight / 2.f
         };
-        pushAABox(boxes, backgroundBox, base02);
+        pushAABox(consoleMesh, backgroundBox, base02);
 
         // NOTE(jan): Building mesh for console prompt.
         const f32 margin = font.info.size / 2.f;
@@ -898,6 +1116,18 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
         }
     }
 
+    // NOTE(jan): Update uniforms.
+    for (auto kv: renderer.pipelines) {
+        auto& pipeline = kv.second;
+
+        if (font.sampler.handle != VK_NULL_HANDLE) {
+            updateCombinedImageSampler(
+                vk.device, pipeline.descriptorSet, 1, &font.sampler, 1
+            );
+        }
+        updateUniformBuffer(vk.device, pipeline.descriptorSet, 0, vk.uniforms.handle);
+    }
+
     // NOTE(jan): Start recording commands.
     VkCommandBuffer cmds = {};
     createCommandBuffers(vk.device, vk.cmdPool, 1, &cmds);
@@ -926,7 +1156,9 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
     vkCmdBeginRenderPass(cmds, &beginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
     const char* brushOrder[] = {
-        "boxes",
+        "glyph_boxes",
+        "lines",
+        "console",
         "text",
     };
     for (auto key: brushOrder) {
@@ -941,12 +1173,6 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
             0, 1, &pipeline.descriptorSet,
             0, nullptr
         );
-        if (font.sampler.handle != VK_NULL_HANDLE) {
-            updateCombinedImageSampler(
-                vk.device, pipeline.descriptorSet, 1, &font.sampler, 1
-            );
-        }
-        updateUniformBuffer(vk.device, pipeline.descriptorSet, 0, vk.uniforms.handle);
 
         RENDERER_GET(mesh, meshes, brush.info.meshName);
         if ((mesh.indexCount == 0) || (mesh.vertexCount == 0)) continue;
@@ -1183,6 +1409,8 @@ WinMain(
     // Load shaders, meshes, fonts, textures, and other resources.
     Renderer renderer;
     init(vk, renderer);
+
+    renderIcon();
 
     // NOTE(jan): Main loop.
     bool done = false;
