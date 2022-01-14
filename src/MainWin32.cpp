@@ -127,13 +127,28 @@ MeshInfo meshInfo[] = {
         .name = "console",
     },
     {
-        .name = "glyph_boxes"
+        .name = "background"
+    },
+    {
+        .name = "control_points"
+    },
+    {
+        .name = "icons",
     }
 };
 
 PipelineInfo pipelineInfo[] = {
     {
         .name = "text",
+        .vertexShaderPath = "shaders/ortho_xy_uv_rgba.vert.spv",
+        .fragmentShaderPath = "shaders/text.frag.spv",
+        .clockwiseWinding = true,
+        .cullBackFaces = false,
+        .depthEnabled = false,
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+    },
+    {
+        .name = "icons",
         .vertexShaderPath = "shaders/ortho_xy_uv_rgba.vert.spv",
         .fragmentShaderPath = "shaders/text.frag.spv",
         .clockwiseWinding = true,
@@ -173,6 +188,11 @@ struct Brush {
 
 BrushInfo brushInfo[] = {
     {
+        .name = "background",
+        .meshName = "background",
+        .pipelineName = "boxes"
+    },
+    {
         .name = "triangles",
         .meshName = "contours",
         .pipelineName = "stencil"
@@ -190,8 +210,14 @@ BrushInfo brushInfo[] = {
         },
     },
     {
-        .name = "glyph_boxes",
-        .meshName = "glyph_boxes",
+        .name = "icons",
+        .meshName = "icons",
+        .pipelineName = "icons",
+        // TODO(jan): Set up uniforms for textures.
+    },
+    {
+        .name = "control_points",
+        .meshName = "control_points",
         .pipelineName = "boxes"
     },
     {
@@ -249,6 +275,8 @@ COLOUR_FROM_HEX(base02,  0x07, 0x36, 0x42);
 COLOUR_FROM_HEX(magenta, 0xd3, 0x36, 0x82);
 COLOUR_FROM_HEX(green,   0x85, 0x99, 0x00);
 COLOUR_FROM_HEX(cyan,    0x2a, 0xa1, 0x98);
+
+VulkanSampler glyphTexture = {};
 
 // ******************************
 // * GEOM: Geometry management. *
@@ -586,7 +614,7 @@ void renderIcon() {
             VK_IMAGE_ASPECT_COLOR_BIT,
             false,
             0,
-            vk.sampleCountFlagBits,
+            VK_SAMPLE_COUNT_1_BIT, // vk.sampleCountFlagBits,
             colorImage
         );
         createVulkanImage(
@@ -602,7 +630,7 @@ void renderIcon() {
             VK_IMAGE_ASPECT_STENCIL_BIT,
             false,
             0,
-            vk.sampleCountFlagBits,
+            VK_SAMPLE_COUNT_1_BIT, // vk.sampleCountFlagBits,
             stencilImage
         );
 
@@ -622,7 +650,7 @@ void renderIcon() {
             VkAttachmentDescription attachmentDescs[] = {
                 {
                     .format = VK_FORMAT_R8G8B8A8_SRGB,
-                    .samples = vk.sampleCountFlagBits,
+                    .samples = VK_SAMPLE_COUNT_1_BIT, // .samples = vk.sampleCountFlagBits,
                     .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
                     .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
                     .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
@@ -630,7 +658,7 @@ void renderIcon() {
                 },
                 {
                     .format = VK_FORMAT_S8_UINT,
-                    .samples = vk.sampleCountFlagBits,
+                    .samples = VK_SAMPLE_COUNT_1_BIT, // .samples = vk.sampleCountFlagBits,
                     .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
                     .stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE,
                     .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
@@ -711,6 +739,7 @@ void renderIcon() {
                 .cullBackFaces = false,
                 .depthEnabled = false,
                 .writeStencilInvert = true,
+                .samples = VK_SAMPLE_COUNT_1_BIT,
                 .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
             };
             initVKPipeline(vk, info, pipeline, &renderPass);
@@ -762,7 +791,7 @@ void renderIcon() {
     }
 
     // NOTE(jan): Render glyph to texture.
-    VulkanImage glyphTexture = {};
+    // VulkanImage glyphTexture = {};
     {
         VkFormat format = VK_FORMAT_R8G8B8A8_SRGB;
         createVulkanImage(
@@ -778,15 +807,15 @@ void renderIcon() {
             VK_IMAGE_ASPECT_COLOR_BIT,
             false,
             0,
-            vk.sampleCountFlagBits,
-            glyphTexture
+            VK_SAMPLE_COUNT_1_BIT, // vk.sampleCountFlagBits,
+            glyphTexture.image
         );
         VkRenderPass renderPass = {};
         {
             VkAttachmentDescription attachmentDescs[] = {
                 {
                     .format = format,
-                    .samples = vk.sampleCountFlagBits,
+                    .samples = VK_SAMPLE_COUNT_1_BIT, // .samples = vk.sampleCountFlagBits,
                     .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
                     .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
                     .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
@@ -794,7 +823,7 @@ void renderIcon() {
                 },
                 {
                     .format = VK_FORMAT_S8_UINT,
-                    .samples = vk.sampleCountFlagBits,
+                    .samples = VK_SAMPLE_COUNT_1_BIT, // .samples = vk.sampleCountFlagBits,
                     .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
                     .stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE,
                     .initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
@@ -829,7 +858,7 @@ void renderIcon() {
 
         VkFramebuffer framebuffer = {};
         {
-            VkImageView attachments[] = { glyphTexture.view, stencilImage.view };
+            VkImageView attachments[] = { glyphTexture.image.view, stencilImage.view };
             VkFramebufferCreateInfo info = {
                 .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
                 .renderPass = renderPass,
@@ -871,6 +900,7 @@ void renderIcon() {
                 .cullBackFaces = false,
                 .depthEnabled = false,
                 .readStencil = true,
+                .samples = VK_SAMPLE_COUNT_1_BIT,
                 .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
             };
             initVKPipeline(vk, info, pipeline, &renderPass);
@@ -910,6 +940,53 @@ void renderIcon() {
         vkCmdDrawIndexed(cmds, mesh.indexCount, 1, 0, 0, 0);
 
         vkCmdEndRenderPass(cmds);
+        endCommandBuffer(cmds);
+
+        {
+            VkSubmitInfo info = {
+                .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                .commandBufferCount = 1,
+                .pCommandBuffers = &cmds
+            };
+            auto result = vkQueueSubmit(vk.queue, 1, &info, VK_NULL_HANDLE);
+            VKCHECK(result);
+        }
+
+        vkDeviceWaitIdle(vk.device);
+    }
+
+    createSampler(vk.device, glyphTexture.handle);
+    {
+        auto cmds = allocateCommandBuffer(vk.device, vk.cmdPoolTransient);
+        beginOneOffCommandBuffer(cmds);
+
+        {
+            VkImageMemoryBarrier barrier = {};
+            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            barrier.image = glyphTexture.image.handle;
+            barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            barrier.subresourceRange.baseArrayLayer = 0;
+            barrier.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
+            barrier.subresourceRange.baseMipLevel = 0;
+            barrier.subresourceRange.levelCount = VK_REMAINING_MIP_LEVELS;
+            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.srcAccessMask = 0;
+            barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+            vkCmdPipelineBarrier(
+                cmds,
+                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                0,
+                0, nullptr,
+                0, nullptr,
+                1, &barrier
+            );
+        }
+
         endCommandBuffer(cmds);
 
         {
@@ -970,8 +1047,10 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
         mesh.vertices.clear();
     }
 
+    RENDERER_GET(background, meshes, "background");
     RENDERER_GET(consoleMesh, meshes, "console");
-    RENDERER_GET(glyphBoxes, meshes, "glyph_boxes");
+    RENDERER_GET(controlPoints, meshes, "control_points");
+    RENDERER_GET(icons, meshes, "icons");
     RENDERER_GET(lines, meshes, "lines");
     RENDERER_GET(contours, meshes, "contours");
     RENDERER_GET(text, meshes, "text");
@@ -1009,7 +1088,15 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
             .y0 = yToScreen(glyph.bbox.y0),
             .y1 = yToScreen(glyph.bbox.y1),
         };
-        pushAABox(glyphBoxes, centeredBox, base03);
+        pushAABox(background, centeredBox, base03);
+
+        AABox textureCoords = {
+            .x0 = 0,
+            .x1 = 1,
+            .y0 = 1,
+            .y1 = 0
+        };
+        pushAABox(icons, centeredBox, textureCoords, base00);
 
         #define vecToScreen(new, old) Vec2 new = Vec2 { .x = xToScreen(old.x), .y = yToScreen(old.y) }
         for (int pointIndex = 0; pointIndex < glyph.pointCount; pointIndex++) {
@@ -1021,7 +1108,7 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
                 .y0 = screenPoint.y - 5,
                 .y1 = screenPoint.y + 5,
             };
-            pushAABox(glyphBoxes, pointBox, magenta);
+            pushAABox(controlPoints, pointBox, magenta);
         }
 
         // NOTE(jan): Push lines.
@@ -1119,13 +1206,18 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
     // NOTE(jan): Update uniforms.
     for (auto kv: renderer.pipelines) {
         auto& pipeline = kv.second;
+        updateUniformBuffer(vk.device, pipeline.descriptorSet, 0, vk.uniforms.handle);
 
-        if (font.sampler.handle != VK_NULL_HANDLE) {
+        const char* key = kv.first;
+        if (strcmp(key, "icons") == 0) {
+            updateCombinedImageSampler(
+                vk.device, pipeline.descriptorSet, 1, &glyphTexture, 1
+            );
+        } else if (font.sampler.handle != VK_NULL_HANDLE) {
             updateCombinedImageSampler(
                 vk.device, pipeline.descriptorSet, 1, &font.sampler, 1
             );
         }
-        updateUniformBuffer(vk.device, pipeline.descriptorSet, 0, vk.uniforms.handle);
     }
 
     // NOTE(jan): Start recording commands.
@@ -1156,7 +1248,9 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
     vkCmdBeginRenderPass(cmds, &beginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
     const char* brushOrder[] = {
-        "glyph_boxes",
+        "background",
+        "icons",
+        "control_points",
         "lines",
         "console",
         "text",
