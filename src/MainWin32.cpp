@@ -276,6 +276,7 @@ COLOUR_FROM_HEX(magenta, 0xd3, 0x36, 0x82);
 COLOUR_FROM_HEX(green,   0x85, 0x99, 0x00);
 COLOUR_FROM_HEX(cyan,    0x2a, 0xa1, 0x98);
 
+char testChar = 'B';
 VulkanSampler glyphTexture = {};
 
 // ******************************
@@ -535,7 +536,7 @@ void renderIcon() {
     TTFFile ttfFile = {};
     TTFGlyph glyph = {};
     bool glyphLoaded = TTFLoadFromPath("fonts/AzeretMono-Medium.ttf", &globalArena, ttfFile) &&
-                       TTFLoadCodepoint(ttfFile, 'A', &tempArena, &globalArena, glyph);
+                       TTFLoadCodepoint(ttfFile, testChar, &tempArena, &globalArena, glyph);
     if (!glyphLoaded) {
         ERR("could not load TTF");
         return;
@@ -543,6 +544,9 @@ void renderIcon() {
 
     const float glyphWidth = glyph.bbox.x1 - glyph.bbox.x0;
     const float glyphHeight = glyph.bbox.y1 - glyph.bbox.y0;
+    #define xToStencil(n) ((n) - glyph.bbox.x0)
+    #define yToStencil(n) (glyphHeight - glyph.bbox.y0 - (n))
+    #define vecToStencil(new, old) Vec2 new = Vec2 { .x = xToStencil(old.x), .y = yToStencil(old.y) }
 
     // NOTE(jan): Push contour mesh.
     Mesh contourMesh = {};
@@ -552,9 +556,6 @@ void renderIcon() {
         u16 contourIndex = 0;
         // NOTE(jan): Should this be outside?
         Vec2 p0 = { .x = 0, .y = 0 };
-        #define xToStencil(n) ((n) - glyph.bbox.x0)
-        #define yToStencil(n) (glyphHeight - glyph.bbox.y0 - (n))
-        #define vecToStencil(new, old) Vec2 new = Vec2 { .x = xToStencil(old.x), .y = yToStencil(old.y) }
         while (contourIndex < glyph.contourCount) {
             u16 contourEnd = glyph.contourEnds[contourIndex];
             if (contourEnd - pointIndex + 1 < 2) {
@@ -589,6 +590,47 @@ void renderIcon() {
             contourMesh.vertices.data(), sizeof(contourMesh.vertices[0]) * contourMesh.vertices.size(),
             contourMesh.indices.data(), sizeof(contourMesh.indices[0]) * contourMesh.indices.size(),
             contourVKMesh
+        );
+    }
+
+    // NOTE(jan): Push correction mesh.
+    Mesh correctionMesh = {};
+    VulkanMesh vkCorrectionMesh = {};
+    {
+        u16 pointIndex = 0;
+        u16 contourIndex = 0;
+        while (contourIndex < glyph.contourCount) {
+            u16 contourEnd = glyph.contourEnds[contourIndex];
+            if (contourEnd - pointIndex + 1 < 3) {
+                pointIndex = contourEnd;
+                continue;
+            }
+
+            umm i0 = pointIndex++;
+            umm i1 = pointIndex++;
+            while (pointIndex <= contourEnd) {
+                umm i2 = pointIndex++;
+
+                Vec2 p0 = glyph.points[i0];
+                vecToStencil(p0Stencil, p0);
+                Vec2 p1 = glyph.points[i1];
+                vecToStencil(p1Stencil, p1);
+                Vec2 p2 = glyph.points[i2];
+                vecToStencil(p2Stencil, p2);
+                pushTriangle(correctionMesh, p0Stencil, p1Stencil, p2Stencil);
+
+                i0 = i1;
+                i1 = i2;
+            }
+
+            contourIndex++;
+        }
+
+        uploadMesh(
+            vk,
+            correctionMesh.vertices.data(), sizeof(correctionMesh.vertices[0]) * correctionMesh.vertices.size(),
+            correctionMesh.indices.data(), sizeof(correctionMesh.indices[0]) * correctionMesh.indices.size(),
+            vkCorrectionMesh
         );
     }
 
@@ -767,11 +809,16 @@ void renderIcon() {
         VkDeviceSize offsets[] = {0};
         vkCmdBindVertexBuffers(cmds, 0, 1, &contourVKMesh.vBuff.handle, offsets);
         vkCmdBindIndexBuffer(cmds, contourVKMesh.iBuff.handle, 0, VK_INDEX_TYPE_UINT32);
-
         for (int i = 0; i < contourMesh.indices.size() / 3; i++) {
             vkCmdDrawIndexed(cmds, 3, 1, i*3, 0, 0);
         }
         // vkCmdDrawIndexed(cmds, mesh.indices.size(), 1, 0, 0, 0);
+
+        // vkCmdBindVertexBuffers(cmds, 0, 1, &vkCorrectionMesh.vBuff.handle, offsets);
+        // vkCmdBindIndexBuffer(cmds, vkCorrectionMesh.iBuff.handle, 0, VK_INDEX_TYPE_UINT32);
+        // for (int i = 0; i < correctionMesh.indices.size() / 3; i++) {
+        //     vkCmdDrawIndexed(cmds, 3, 1, i*3, 0, 0);
+        // }
 
         vkCmdEndRenderPass(cmds);
         endCommandBuffer(cmds);
@@ -1070,7 +1117,7 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
     TTFFile ttfFile = {};
     TTFGlyph glyph = {};
     bool glyphLoaded = TTFLoadFromPath("fonts/AzeretMono-Medium.ttf", &frameArena, ttfFile) &&
-                       TTFLoadCodepoint(ttfFile, 'A', &frameArena, &frameArena, glyph);
+                       TTFLoadCodepoint(ttfFile, testChar, &frameArena, &frameArena, glyph);
     if (!glyphLoaded) {
         ERR("could not load TTF");
     } else {
@@ -1108,7 +1155,12 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
                 .y0 = screenPoint.y - 5,
                 .y1 = screenPoint.y + 5,
             };
-            pushAABox(controlPoints, pointBox, magenta);
+
+            if (glyph.isOnCurve[pointIndex]) {
+                pushAABox(controlPoints, pointBox, green);
+            } else {
+                pushAABox(controlPoints, pointBox, magenta);
+            }
         }
 
         // NOTE(jan): Push lines.

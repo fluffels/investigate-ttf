@@ -72,6 +72,7 @@ struct TTFGlyph {
     u16* contourEnds;
     u16 pointCount;
     Vec2* points;
+    bool* isOnCurve;
 };
 
 inline void
@@ -269,6 +270,13 @@ TTFLoadGlyph(TTFFile& file, u32 index, MemoryArena* tempArena, MemoryArena* aren
         }
     }
 
+    bool* isOnCurve = (bool*)memoryArenaAllocate(arena, sizeof(bool) * pointCount);
+    memset(isOnCurve, 0, sizeof(bool) * pointCount);
+
+    for (int pointIndex = 0; pointIndex < pointCount; pointIndex++) {
+        isOnCurve[pointIndex] = (flags[pointIndex] & TTF_FLAG_ON_CURVE) ? true : false;
+    }
+
     Vec2* points = (Vec2*)memoryArenaAllocate(arena, sizeof(Vec2) * pointCount);
     memset(points, 0, sizeof(Vec2) * pointCount);
 
@@ -316,6 +324,40 @@ TTFLoadGlyph(TTFFile& file, u32 index, MemoryArena* tempArena, MemoryArena* aren
         }
     }
 
+    int pointIndex = 0;
+    int contourIndex = 0;
+    int totalPointsToAdd = 0;
+    while (contourIndex < contourCount) {
+        u16 contourEnd = contourEnds[contourIndex];
+        while (pointIndex < contourEnd) {
+            u8 flag = flags[pointIndex];
+
+            if ((flag & TTF_FLAG_ON_CURVE) == 0) {
+                ERR("contour does not start on curve?");
+                return false;
+            }
+
+            int nextOnCurveIndex = pointIndex + 1;
+            while ((flags[nextOnCurveIndex] & TTF_FLAG_ON_CURVE) && (nextOnCurveIndex < contourEnd)) {
+                nextOnCurveIndex++;
+            }
+
+            if (nextOnCurveIndex >= contourEnd) {
+                ERR("contour does not end on curve?");
+                return false;
+            }
+
+            int distance = nextOnCurveIndex - pointIndex;
+            int pointsToAdd = distance - 1;
+
+            if (distance == 1) totalPointsToAdd++;
+            else totalPointsToAdd += pointsToAdd;
+
+            pointIndex++;
+        }
+        contourIndex++;
+    }
+
     result.bbox.x0 = minX;
     result.bbox.x1 = maxX;
     result.bbox.y0 = minY;
@@ -324,8 +366,12 @@ TTFLoadGlyph(TTFFile& file, u32 index, MemoryArena* tempArena, MemoryArena* aren
     result.contourEnds = contourEnds;
     result.pointCount = pointCount;
     result.points = points;
+    result.isOnCurve = isOnCurve;
 
     file.position = oldPosition;
+
+    memoryArenaClear(tempArena);
+
     return true;
 }
 
