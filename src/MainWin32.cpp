@@ -925,8 +925,12 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
 
     vkCmdBeginRenderPass(cmds, &beginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-    for (auto& kv: renderer.brushes) {
-        Brush& brush = kv.second;
+    const char* brushOrder[] = {
+        "boxes",
+        "text",
+    };
+    for (auto key: brushOrder) {
+        RENDERER_GET(brush, brushes, key);
 
         RENDERER_GET(pipeline, pipelines, brush.info.pipelineName);
         vkCmdBindPipeline(
