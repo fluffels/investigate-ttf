@@ -287,6 +287,7 @@ COLOUR_FROM_HEX(yellow,  0xb5, 0x89, 0x00);
 
 char testChar = 'B';
 VulkanSampler glyphTexture = {};
+bool interpolateGlyph = true;
 
 // ******************************
 // * GEOM: Geometry management. *
@@ -545,7 +546,7 @@ void renderIcon() {
     TTFFile ttfFile = {};
     TTFGlyph glyph = {};
     bool glyphLoaded = TTFLoadFromPath("fonts/AzeretMono-Medium.ttf", &globalArena, ttfFile) &&
-                       TTFLoadCodepoint(ttfFile, testChar, &tempArena, &globalArena, glyph);
+                       TTFLoadCodepoint(ttfFile, testChar, interpolateGlyph, &tempArena, &globalArena, glyph);
     if (!glyphLoaded) {
         ERR("could not load TTF");
         return;
@@ -1127,7 +1128,7 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
     TTFFile ttfFile = {};
     TTFGlyph glyph = {};
     bool glyphLoaded = TTFLoadFromPath("fonts/AzeretMono-Medium.ttf", &frameArena, ttfFile) &&
-                       TTFLoadCodepoint(ttfFile, testChar, &frameArena, &frameArena, glyph);
+                       TTFLoadCodepoint(ttfFile, testChar, interpolateGlyph, &frameArena, &frameArena, glyph);
     if (!glyphLoaded) {
         ERR("could not load TTF");
     } else {
@@ -1477,6 +1478,11 @@ WindowProc(
                 case VK_NEXT: input.consolePageDown = true; break;
                 case VK_RETURN: input.consoleNewLine = true; break;
                 case VK_F1: input.consoleToggle = true; break;
+                case 'I': {
+                    interpolateGlyph = !interpolateGlyph;
+                    renderIcon();
+                    break;
+                }
             }
             break;
         } case WM_KEYUP: {

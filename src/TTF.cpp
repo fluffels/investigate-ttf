@@ -212,7 +212,7 @@ TTFLoadFromPath(const char* path, MemoryArena* arena, TTFFile& file) {
 }
 
 bool
-TTFLoadGlyph(TTFFile& file, u32 index, MemoryArena* tempArena, MemoryArena* arena, TTFGlyph& result) {
+TTFLoadGlyph(TTFFile& file, u32 index, bool interpolate, MemoryArena* tempArena, MemoryArena* arena, TTFGlyph& result) {
     umm oldPosition = file.position;
 
     TTFSeekToTableOrFail("loca")
@@ -324,48 +324,90 @@ TTFLoadGlyph(TTFFile& file, u32 index, MemoryArena* tempArena, MemoryArena* aren
         }
     }
 
-    // int pointIndex = 0;
-    // int contourIndex = 0;
-    // int totalPointsToAdd = 0;
-    // while (contourIndex < contourCount) {
-    //     u16 contourEnd = contourEnds[contourIndex];
+    if (!interpolate) {
+        result.bbox.x0 = minX;
+        result.bbox.x1 = maxX;
+        result.bbox.y0 = minY;
+        result.bbox.y1 = maxY;
+        result.contourCount = contourCount;
+        result.contourEnds = contourEnds;
+        result.pointCount = pointCount;
+        result.points = points;
+        result.isOnCurve = isOnCurve;
 
-    //     if ((flags[pointIndex] & TTF_FLAG_ON_CURVE) == 0) {
-    //         ERR("contour does not start on curve?");
-    //         return false;
-    //     }
+        file.position = oldPosition;
 
-    //     while (pointIndex < contourEnd) {
-    //         int nextOnCurveIndex = pointIndex + 1;
-    //         while (((flags[nextOnCurveIndex] & TTF_FLAG_ON_CURVE) == 0) && (nextOnCurveIndex < contourEnd)) {
-    //             nextOnCurveIndex++;
-    //         }
+        return true;
+    }
 
-    //         if (nextOnCurveIndex >= contourEnd) {
-    //             ERR("contour does not end on curve?");
-    //             return false;
-    //         }
+    int totalPointsToAdd = 0;
+    for (int pointIndex = 0; pointIndex < pointCount; pointIndex++) {
+        int nextPointIndex = pointIndex + 1;
 
-    //         int distance = nextOnCurveIndex - pointIndex;
-    //         int pointsToAdd = distance - 1;
+        int pointFlags = flags[pointIndex];
+        int nextPointFlags = flags[nextPointIndex];
 
-    //         if (distance == 1) totalPointsToAdd++;
-    //         else totalPointsToAdd += pointsToAdd;
+        bool onCurve = (pointFlags & TTF_FLAG_ON_CURVE) > 0;
+        bool nextPointOnCurve = (nextPointFlags & TTF_FLAG_ON_CURVE) > 0;
 
-    //         pointIndex++;
-    //     }
-    //     contourIndex++;
-    // }
+        if (!onCurve && !nextPointOnCurve) totalPointsToAdd++;
+    }
+
+    umm newPointCount = pointCount + totalPointsToAdd;
+
+    u16* newContourEnds = (u16*)memoryArenaAllocate(arena, sizeof(u16) * contourCount);
+    for (int contourIndex = 0; contourIndex < contourCount; contourIndex++) {
+        newContourEnds[contourIndex] = contourEnds[contourIndex];
+    }
+
+    bool* newIsOnCurve = (bool*)memoryArenaAllocate(arena, sizeof(bool) * newPointCount);
+    memset(newIsOnCurve, 0, sizeof(bool) * newPointCount);
+
+    Vec2* newPoints = (Vec2*)memoryArenaAllocate(arena, sizeof(Vec2) * newPointCount);
+    memset(newPoints, 0, sizeof(Vec2) * newPointCount);
+
+    int contourIndex = 0;
+    int newPointIndex = 0;
+    for (int pointIndex = 0; pointIndex < pointCount - 1; pointIndex++) {
+        int contourEnd = contourEnds[contourIndex];
+        if (pointIndex > contourEnd) contourIndex++;
+
+        Vec2 point = points[pointIndex];
+        newPoints[newPointIndex] = point;
+        newIsOnCurve[newPointIndex] = isOnCurve[pointIndex];
+        newPointIndex++;
+
+        int nextPointIndex = pointIndex + 1;
+        Vec2 nextPoint = points[nextPointIndex];
+
+        int pointFlags = flags[pointIndex];
+        int nextPointFlags = flags[nextPointIndex];
+
+        bool onCurve = (pointFlags & TTF_FLAG_ON_CURVE) > 0;
+        bool nextPointOnCurve = (nextPointFlags & TTF_FLAG_ON_CURVE) > 0;
+
+        if (!onCurve && !nextPointOnCurve) {
+            Vec2 newPoint = {};
+            vectorInterpolate(point, nextPoint, .5f, newPoint);
+            newPoints[newPointIndex] = newPoint;
+            newIsOnCurve[newPointIndex] = true;
+            newPointIndex++;
+
+            for (int i = contourIndex; i < contourCount; i++) newContourEnds[i]++;
+        }
+    }
+    newPoints[newPointIndex] = points[pointCount - 1];
+    newIsOnCurve[newPointIndex] = true;
 
     result.bbox.x0 = minX;
     result.bbox.x1 = maxX;
     result.bbox.y0 = minY;
     result.bbox.y1 = maxY;
     result.contourCount = contourCount;
-    result.contourEnds = contourEnds;
-    result.pointCount = pointCount;
-    result.points = points;
-    result.isOnCurve = isOnCurve;
+    result.contourEnds = newContourEnds;
+    result.pointCount = newPointCount;
+    result.points = newPoints;
+    result.isOnCurve = newIsOnCurve;
 
     file.position = oldPosition;
 
@@ -373,7 +415,7 @@ TTFLoadGlyph(TTFFile& file, u32 index, MemoryArena* tempArena, MemoryArena* aren
 }
 
 bool
-TTFLoadCodepoint(TTFFile& file, u32 codepoint, MemoryArena* tempArena, MemoryArena* arena, TTFGlyph& result) {
+TTFLoadCodepoint(TTFFile& file, u32 codepoint, bool interpolate, MemoryArena* tempArena, MemoryArena* arena, TTFGlyph& result) {
     TTFSeekToTableOrFail("cmap")
     u16 version = TTFReadU16(file);
     u16 subtableCount = TTFReadU16(file);
@@ -440,5 +482,5 @@ TTFLoadCodepoint(TTFFile& file, u32 codepoint, MemoryArena* tempArena, MemoryAre
         glyphIndex = idDelta + TTFReadU16(file);
     }
 
-    return TTFLoadGlyph(file, glyphIndex, tempArena, arena, result);
+    return TTFLoadGlyph(file, glyphIndex, interpolate, tempArena, arena, result);
 }
