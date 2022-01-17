@@ -288,6 +288,7 @@ COLOUR_FROM_HEX(yellow,  0xb5, 0x89, 0x00);
 char testChar = 'B';
 VulkanSampler glyphTexture = {};
 bool interpolateGlyph = true;
+bool debug = true;
 
 // ******************************
 // * GEOM: Geometry management. *
@@ -575,9 +576,13 @@ void renderIcon() {
             Vec2 firstPoint = glyph.points[pointIndex];
             vecToStencil(firstPointStencil, firstPoint);
 
-            umm i1 = pointIndex++;
+            umm i1 = pointIndex;
+            pointIndex += 2;
             while (pointIndex <= contourEnd) {
-                umm i2 = pointIndex++;
+                umm i2 = pointIndex;
+                pointIndex += 2;
+
+                INFO("%d -> %d", i1, i2);
 
                 Vec2 p1 = glyph.points[i1];
                 vecToStencil(p1Stencil, p1);
@@ -588,7 +593,8 @@ void renderIcon() {
                 i1 = i2;
             }
 
-            Vec2 lastPoint = glyph.points[contourEnd];
+            INFO("lastPoint: %d", i1);
+            Vec2 lastPoint = glyph.points[i1];
             vecToStencil(lastPointStencil, lastPoint);
             pushTriangle(contourMesh, p0, firstPointStencil, lastPointStencil);
 
@@ -615,11 +621,12 @@ void renderIcon() {
                 pointIndex = contourEnd;
                 continue;
             }
+            u16 contourStart = pointIndex;
 
-            umm i0 = pointIndex++;
-            umm i1 = pointIndex++;
-            while (pointIndex <= contourEnd) {
-                umm i2 = pointIndex++;
+            while (pointIndex <= contourEnd - 3) {
+                umm i0 = pointIndex++;
+                umm i1 = pointIndex++;
+                umm i2 = pointIndex;
 
                 Vec2 p0 = glyph.points[i0];
                 vecToStencil(p0Stencil, p0);
@@ -628,10 +635,18 @@ void renderIcon() {
                 Vec2 p2 = glyph.points[i2];
                 vecToStencil(p2Stencil, p2);
                 pushTriangle(correctionMesh, p0Stencil, p1Stencil, p2Stencil);
-
-                i0 = i1;
-                i1 = i2;
             }
+
+            umm i0 = pointIndex++;
+            umm i1 = pointIndex++;
+            umm i2 = contourStart;
+            Vec2 p0 = glyph.points[i0];
+            vecToStencil(p0Stencil, p0);
+            Vec2 p1 = glyph.points[i1];
+            vecToStencil(p1Stencil, p1);
+            Vec2 p2 = glyph.points[i2];
+            vecToStencil(p2Stencil, p2);
+            pushTriangle(correctionMesh, p0Stencil, p1Stencil, p2Stencil);
 
             contourIndex++;
         }
@@ -824,11 +839,11 @@ void renderIcon() {
         }
         // vkCmdDrawIndexed(cmds, mesh.indices.size(), 1, 0, 0, 0);
 
-        // vkCmdBindVertexBuffers(cmds, 0, 1, &vkCorrectionMesh.vBuff.handle, offsets);
-        // vkCmdBindIndexBuffer(cmds, vkCorrectionMesh.iBuff.handle, 0, VK_INDEX_TYPE_UINT32);
-        // for (int i = 0; i < correctionMesh.indices.size() / 3; i++) {
-        //     vkCmdDrawIndexed(cmds, 3, 1, i*3, 0, 0);
-        // }
+        vkCmdBindVertexBuffers(cmds, 0, 1, &vkCorrectionMesh.vBuff.handle, offsets);
+        vkCmdBindIndexBuffer(cmds, vkCorrectionMesh.iBuff.handle, 0, VK_INDEX_TYPE_UINT32);
+        for (int i = 0; i < correctionMesh.indices.size() / 3; i++) {
+            vkCmdDrawIndexed(cmds, 3, 1, i*3, 0, 0);
+        }
 
         vkCmdEndRenderPass(cmds);
         endCommandBuffer(cmds);
@@ -1156,66 +1171,71 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
         };
         pushAABox(icons, centeredBox, textureCoords, base00);
 
-        #define vecToScreen(new, old) Vec2 new = Vec2 { .x = xToScreen(old.x), .y = yToScreen(old.y) }
-        int contourIndex = 0;
-        for (int pointIndex = 0; pointIndex < glyph.pointCount; pointIndex++) {
-            int contourEnd = glyph.contourEnds[contourIndex];
-            if (pointIndex > contourEnd) contourIndex++;
+        // NOTE(jan): Push control points.
+        if (debug) {
+            #define vecToScreen(new, old) Vec2 new = Vec2 { .x = xToScreen(old.x), .y = yToScreen(old.y) }
+            int contourIndex = 0;
+            for (int pointIndex = 0; pointIndex < glyph.pointCount; pointIndex++) {
+                int contourEnd = glyph.contourEnds[contourIndex];
+                if (pointIndex > contourEnd) contourIndex++;
 
-            const Vec2 glyphPoint = glyph.points[pointIndex];
-            vecToScreen(screenPoint, glyphPoint);
-            AABox pointBox = {
-                .x0 = screenPoint.x - 5,
-                .x1 = screenPoint.x + 5,
-                .y0 = screenPoint.y - 5,
-                .y1 = screenPoint.y + 5,
-            };
+                const Vec2 glyphPoint = glyph.points[pointIndex];
+                vecToScreen(screenPoint, glyphPoint);
+                AABox pointBox = {
+                    .x0 = screenPoint.x - 5,
+                    .x1 = screenPoint.x + 5,
+                    .y0 = screenPoint.y - 5,
+                    .y1 = screenPoint.y + 5,
+                };
 
-            if (glyph.isOnCurve[pointIndex]) {
-                pushAABox(controlPoints, pointBox, green);
-            } else {
-                pushAABox(controlPoints, pointBox, magenta);
+                if (glyph.isOnCurve[pointIndex]) {
+                    pushAABox(controlPoints, pointBox, green);
+                } else {
+                    pushAABox(controlPoints, pointBox, magenta);
+                }
+
+                AABox labelBox = {
+                    .x0 = pointBox.x1 + 5,
+                    .x1 = windowWidth,
+                    .y1 = pointBox.y1 + 5
+                };
+                char labelBuffer[255];
+                int written = snprintf(labelBuffer, 255, "%d/%d", pointIndex, contourIndex);
+                String label = {
+                    .size = 255,
+                    .length = static_cast<umm>(written),
+                    .data = labelBuffer,
+                };
+
+                pushText(labels, font, labelBox, label, yellow);
             }
-
-            AABox labelBox = {
-                .x0 = pointBox.x1 + 5,
-                .x1 = windowWidth,
-                .y1 = pointBox.y1 + 5
-            };
-            char labelBuffer[255];
-            int written = snprintf(labelBuffer, 255, "%d (%d)", pointIndex, contourIndex);
-            String label = {
-                .size = 255,
-                .length = static_cast<umm>(written),
-                .data = labelBuffer,
-            };
-
-            pushText(labels, font, labelBox, label, yellow);
         }
 
         // NOTE(jan): Push lines.
-        int pointIndex = 0;
-        contourIndex = 0;
-        while (contourIndex < glyph.contourCount) {
-            u16 contourEnd = glyph.contourEnds[contourIndex];
-            Vec2 firstPoint = glyph.points[pointIndex];
+        if (debug) {
+            int pointIndex = 0;
+            int contourIndex = 0;
+            while (contourIndex < glyph.contourCount) {
+                u16 contourEnd = glyph.contourEnds[contourIndex];
+                Vec2 firstPoint = glyph.points[pointIndex];
 
-            while (pointIndex < contourEnd) {
-                Vec2 point = glyph.points[pointIndex];
-                vecToScreen(screenPoint, point);
-                Vec2 nextPoint = glyph.points[pointIndex+1];
-                vecToScreen(screenNextPoint, nextPoint);
-                pushLine(lines, screenPoint, screenNextPoint, green);
+                while (pointIndex < contourEnd) {
+                    Vec2 point = glyph.points[pointIndex];
+                    vecToScreen(screenPoint, point);
+                    Vec2 nextPoint = glyph.points[pointIndex+1];
+                    vecToScreen(screenNextPoint, nextPoint);
+                    pushLine(lines, screenPoint, screenNextPoint, green);
+                    pointIndex++;
+                }
+
+                Vec2 lastPoint = glyph.points[pointIndex];
+                vecToScreen(screenFirstPoint, firstPoint);
+                vecToScreen(screenLastPoint, lastPoint);
+                pushLine(lines, screenFirstPoint, screenLastPoint, green);
+
                 pointIndex++;
+                contourIndex++;
             }
-
-            Vec2 lastPoint = glyph.points[pointIndex];
-            vecToScreen(screenFirstPoint, firstPoint);
-            vecToScreen(screenLastPoint, lastPoint);
-            pushLine(lines, screenFirstPoint, screenLastPoint, green);
-
-            pointIndex++;
-            contourIndex++;
         }
     }
 
@@ -1480,6 +1500,11 @@ WindowProc(
                 case VK_F1: input.consoleToggle = true; break;
                 case 'I': {
                     interpolateGlyph = !interpolateGlyph;
+                    renderIcon();
+                    break;
+                }
+                case 'D': {
+                    debug = !debug;
                     renderIcon();
                     break;
                 }

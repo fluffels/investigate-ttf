@@ -352,6 +352,20 @@ TTFLoadGlyph(TTFFile& file, u32 index, bool interpolate, MemoryArena* tempArena,
 
         if ((!pointOnCurve && !nextPointOnCurve) || (pointOnCurve && nextPointOnCurve)) totalPointsToAdd++;
     }
+    int contourStart = 0;
+    for (int contourIndex = 0; contourIndex < contourCount; contourIndex++) {
+        int contourEnd = contourEnds[contourIndex];
+
+        int pointFlags = flags[contourEnd];
+        int nextPointFlags = flags[contourStart];
+
+        bool pointOnCurve = (pointFlags & TTF_FLAG_ON_CURVE) > 0;
+        bool nextPointOnCurve = (nextPointFlags & TTF_FLAG_ON_CURVE) > 0;
+
+        if ((!pointOnCurve && !nextPointOnCurve) || (pointOnCurve && nextPointOnCurve)) totalPointsToAdd++;
+
+        contourStart = contourEnd + 1;
+    }
 
     umm newPointCount = pointCount + totalPointsToAdd;
 
@@ -368,20 +382,56 @@ TTFLoadGlyph(TTFFile& file, u32 index, bool interpolate, MemoryArena* tempArena,
 
     int contourIndex = 0;
     int newPointIndex = 0;
-    for (int pointIndex = 0; pointIndex < pointCount - 1; pointIndex++) {
+    contourStart = 0;
+    for (int contourIndex = 0; contourIndex < contourCount; contourIndex++) {
         int contourEnd = contourEnds[contourIndex];
-        if (pointIndex > contourEnd) contourIndex++;
 
-        Vec2 point = points[pointIndex];
+        for (int pointIndex = contourStart; pointIndex < contourEnd; pointIndex++) {
+            int contourEnd = contourEnds[contourIndex];
+            if (pointIndex > contourEnd) contourIndex++;
+
+            Vec2 point = points[pointIndex];
+            newPoints[newPointIndex] = point;
+            newIsOnCurve[newPointIndex] = isOnCurve[pointIndex];
+            newPointIndex++;
+
+            int nextPointIndex = pointIndex + 1;
+            Vec2 nextPoint = points[nextPointIndex];
+
+            int pointFlags = flags[pointIndex];
+            int nextPointFlags = flags[nextPointIndex];
+
+            bool pointOnCurve = (pointFlags & TTF_FLAG_ON_CURVE) > 0;
+            bool nextPointOnCurve = (nextPointFlags & TTF_FLAG_ON_CURVE) > 0;
+
+            if (!pointOnCurve && !nextPointOnCurve) {
+                Vec2 newPoint = {};
+                vectorInterpolate(point, nextPoint, .5f, newPoint);
+                newPoints[newPointIndex] = newPoint;
+                newIsOnCurve[newPointIndex] = true;
+                newPointIndex++;
+
+                for (int i = contourIndex; i < contourCount; i++) newContourEnds[i]++;
+            } else if (pointOnCurve && nextPointOnCurve) {
+                Vec2 newPoint = {};
+                vectorInterpolate(point, nextPoint, .5f, newPoint);
+                newPoints[newPointIndex] = newPoint;
+                newIsOnCurve[newPointIndex] = false;
+                newPointIndex++;
+
+                for (int i = contourIndex; i < contourCount; i++) newContourEnds[i]++;
+            }
+        }
+
+        Vec2 point = points[contourEnd];
         newPoints[newPointIndex] = point;
-        newIsOnCurve[newPointIndex] = isOnCurve[pointIndex];
+        newIsOnCurve[newPointIndex] = isOnCurve[contourEnd];
         newPointIndex++;
 
-        int nextPointIndex = pointIndex + 1;
-        Vec2 nextPoint = points[nextPointIndex];
+        Vec2 nextPoint = points[contourStart];
 
-        int pointFlags = flags[pointIndex];
-        int nextPointFlags = flags[nextPointIndex];
+        int pointFlags = flags[contourEnd];
+        int nextPointFlags = flags[contourStart];
 
         bool pointOnCurve = (pointFlags & TTF_FLAG_ON_CURVE) > 0;
         bool nextPointOnCurve = (nextPointFlags & TTF_FLAG_ON_CURVE) > 0;
@@ -403,9 +453,11 @@ TTFLoadGlyph(TTFFile& file, u32 index, bool interpolate, MemoryArena* tempArena,
 
             for (int i = contourIndex; i < contourCount; i++) newContourEnds[i]++;
         }
+
+        contourStart = contourEnd + 1;
     }
-    newPoints[newPointIndex] = points[pointCount - 1];
-    newIsOnCurve[newPointIndex] = true;
+    // newPoints[newPointIndex] = points[pointCount - 1];
+    // newIsOnCurve[newPointIndex] = true;
 
     result.bbox.x0 = minX;
     result.bbox.x1 = maxX;
