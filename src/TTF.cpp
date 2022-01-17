@@ -369,8 +369,6 @@ TTFLoadGlyph(TTFFile& file, u32 index, MemoryArena* tempArena, MemoryArena* aren
 
     file.position = oldPosition;
 
-    // memoryArenaClear(tempArena);
-
     return true;
 }
 
