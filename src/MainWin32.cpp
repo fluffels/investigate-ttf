@@ -1156,7 +1156,11 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
         pushAABox(icons, centeredBox, textureCoords, base00);
 
         #define vecToScreen(new, old) Vec2 new = Vec2 { .x = xToScreen(old.x), .y = yToScreen(old.y) }
+        int contourIndex = 0;
         for (int pointIndex = 0; pointIndex < glyph.pointCount; pointIndex++) {
+            int contourEnd = glyph.contourEnds[contourIndex];
+            if (pointIndex > contourEnd) contourIndex++;
+
             const Vec2 glyphPoint = glyph.points[pointIndex];
             vecToScreen(screenPoint, glyphPoint);
             AABox pointBox = {
@@ -1178,7 +1182,7 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
                 .y1 = pointBox.y1 + 5
             };
             char labelBuffer[255];
-            int written = snprintf(labelBuffer, 255, "%d", pointIndex);
+            int written = snprintf(labelBuffer, 255, "%d (%d)", pointIndex, contourIndex);
             String label = {
                 .size = 255,
                 .length = static_cast<umm>(written),
@@ -1190,7 +1194,7 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
 
         // NOTE(jan): Push lines.
         int pointIndex = 0;
-        int contourIndex = 0;
+        contourIndex = 0;
         while (contourIndex < glyph.contourCount) {
             u16 contourEnd = glyph.contourEnds[contourIndex];
             Vec2 firstPoint = glyph.points[pointIndex];
