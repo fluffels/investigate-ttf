@@ -121,6 +121,9 @@ MeshInfo meshInfo[] = {
         .name = "text",
     },
     {
+        .name = "labels",
+    },
+    {
         .name = "lines",
     },
     {
@@ -221,6 +224,11 @@ BrushInfo brushInfo[] = {
         .pipelineName = "boxes"
     },
     {
+        .name = "labels",
+        .meshName = "labels",
+        .pipelineName = "text"
+    },
+    {
         .name = "console",
         .meshName = "console",
         .pipelineName = "boxes"
@@ -275,6 +283,7 @@ COLOUR_FROM_HEX(base02,  0x07, 0x36, 0x42);
 COLOUR_FROM_HEX(magenta, 0xd3, 0x36, 0x82);
 COLOUR_FROM_HEX(green,   0x85, 0x99, 0x00);
 COLOUR_FROM_HEX(cyan,    0x2a, 0xa1, 0x98);
+COLOUR_FROM_HEX(yellow,  0xb5, 0x89, 0x00);
 
 char testChar = 'B';
 VulkanSampler glyphTexture = {};
@@ -1097,6 +1106,7 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
     RENDERER_GET(background, meshes, "background");
     RENDERER_GET(consoleMesh, meshes, "console");
     RENDERER_GET(controlPoints, meshes, "control_points");
+    RENDERER_GET(labels, meshes, "labels");
     RENDERER_GET(icons, meshes, "icons");
     RENDERER_GET(lines, meshes, "lines");
     RENDERER_GET(contours, meshes, "contours");
@@ -1161,6 +1171,21 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
             } else {
                 pushAABox(controlPoints, pointBox, magenta);
             }
+
+            AABox labelBox = {
+                .x0 = pointBox.x1 + 5,
+                .x1 = windowWidth,
+                .y1 = pointBox.y1 + 5
+            };
+            char labelBuffer[255];
+            int written = snprintf(labelBuffer, 255, "%d", pointIndex);
+            String label = {
+                .size = 255,
+                .length = static_cast<umm>(written),
+                .data = labelBuffer,
+            };
+
+            pushText(labels, font, labelBox, label, yellow);
         }
 
         // NOTE(jan): Push lines.
@@ -1303,6 +1328,7 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
         "background",
         "icons",
         "control_points",
+        "labels",
         "lines",
         "console",
         "text",

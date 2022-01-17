@@ -324,39 +324,38 @@ TTFLoadGlyph(TTFFile& file, u32 index, MemoryArena* tempArena, MemoryArena* aren
         }
     }
 
-    int pointIndex = 0;
-    int contourIndex = 0;
-    int totalPointsToAdd = 0;
-    while (contourIndex < contourCount) {
-        u16 contourEnd = contourEnds[contourIndex];
-        while (pointIndex < contourEnd) {
-            u8 flag = flags[pointIndex];
+    // int pointIndex = 0;
+    // int contourIndex = 0;
+    // int totalPointsToAdd = 0;
+    // while (contourIndex < contourCount) {
+    //     u16 contourEnd = contourEnds[contourIndex];
 
-            if ((flag & TTF_FLAG_ON_CURVE) == 0) {
-                ERR("contour does not start on curve?");
-                return false;
-            }
+    //     if ((flags[pointIndex] & TTF_FLAG_ON_CURVE) == 0) {
+    //         ERR("contour does not start on curve?");
+    //         return false;
+    //     }
 
-            int nextOnCurveIndex = pointIndex + 1;
-            while ((flags[nextOnCurveIndex] & TTF_FLAG_ON_CURVE) && (nextOnCurveIndex < contourEnd)) {
-                nextOnCurveIndex++;
-            }
+    //     while (pointIndex < contourEnd) {
+    //         int nextOnCurveIndex = pointIndex + 1;
+    //         while (((flags[nextOnCurveIndex] & TTF_FLAG_ON_CURVE) == 0) && (nextOnCurveIndex < contourEnd)) {
+    //             nextOnCurveIndex++;
+    //         }
 
-            if (nextOnCurveIndex >= contourEnd) {
-                ERR("contour does not end on curve?");
-                return false;
-            }
+    //         if (nextOnCurveIndex >= contourEnd) {
+    //             ERR("contour does not end on curve?");
+    //             return false;
+    //         }
 
-            int distance = nextOnCurveIndex - pointIndex;
-            int pointsToAdd = distance - 1;
+    //         int distance = nextOnCurveIndex - pointIndex;
+    //         int pointsToAdd = distance - 1;
 
-            if (distance == 1) totalPointsToAdd++;
-            else totalPointsToAdd += pointsToAdd;
+    //         if (distance == 1) totalPointsToAdd++;
+    //         else totalPointsToAdd += pointsToAdd;
 
-            pointIndex++;
-        }
-        contourIndex++;
-    }
+    //         pointIndex++;
+    //     }
+    //     contourIndex++;
+    // }
 
     result.bbox.x0 = minX;
     result.bbox.x1 = maxX;
@@ -370,7 +369,7 @@ TTFLoadGlyph(TTFFile& file, u32 index, MemoryArena* tempArena, MemoryArena* aren
 
     file.position = oldPosition;
 
-    memoryArenaClear(tempArena);
+    // memoryArenaClear(tempArena);
 
     return true;
 }
