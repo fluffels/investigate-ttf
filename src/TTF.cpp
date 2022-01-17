@@ -341,16 +341,16 @@ TTFLoadGlyph(TTFFile& file, u32 index, bool interpolate, MemoryArena* tempArena,
     }
 
     int totalPointsToAdd = 0;
-    for (int pointIndex = 0; pointIndex < pointCount; pointIndex++) {
+    for (int pointIndex = 0; pointIndex < pointCount - 1; pointIndex++) {
         int nextPointIndex = pointIndex + 1;
 
         int pointFlags = flags[pointIndex];
         int nextPointFlags = flags[nextPointIndex];
 
-        bool onCurve = (pointFlags & TTF_FLAG_ON_CURVE) > 0;
+        bool pointOnCurve = (pointFlags & TTF_FLAG_ON_CURVE) > 0;
         bool nextPointOnCurve = (nextPointFlags & TTF_FLAG_ON_CURVE) > 0;
 
-        if (!onCurve && !nextPointOnCurve) totalPointsToAdd++;
+        if ((!pointOnCurve && !nextPointOnCurve) || (pointOnCurve && nextPointOnCurve)) totalPointsToAdd++;
     }
 
     umm newPointCount = pointCount + totalPointsToAdd;
@@ -383,14 +383,22 @@ TTFLoadGlyph(TTFFile& file, u32 index, bool interpolate, MemoryArena* tempArena,
         int pointFlags = flags[pointIndex];
         int nextPointFlags = flags[nextPointIndex];
 
-        bool onCurve = (pointFlags & TTF_FLAG_ON_CURVE) > 0;
+        bool pointOnCurve = (pointFlags & TTF_FLAG_ON_CURVE) > 0;
         bool nextPointOnCurve = (nextPointFlags & TTF_FLAG_ON_CURVE) > 0;
 
-        if (!onCurve && !nextPointOnCurve) {
+        if (!pointOnCurve && !nextPointOnCurve) {
             Vec2 newPoint = {};
             vectorInterpolate(point, nextPoint, .5f, newPoint);
             newPoints[newPointIndex] = newPoint;
             newIsOnCurve[newPointIndex] = true;
+            newPointIndex++;
+
+            for (int i = contourIndex; i < contourCount; i++) newContourEnds[i]++;
+        } else if (pointOnCurve && nextPointOnCurve) {
+            Vec2 newPoint = {};
+            vectorInterpolate(point, nextPoint, .5f, newPoint);
+            newPoints[newPointIndex] = newPoint;
+            newIsOnCurve[newPointIndex] = false;
             newPointIndex++;
 
             for (int i = contourIndex; i < contourCount; i++) newContourEnds[i]++;
