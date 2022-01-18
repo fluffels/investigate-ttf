@@ -212,7 +212,7 @@ TTFLoadFromPath(const char* path, MemoryArena* arena, TTFFile& file) {
 }
 
 bool
-TTFLoadGlyph(TTFFile& file, u32 index, bool interpolate, MemoryArena* tempArena, MemoryArena* arena, TTFGlyph& result) {
+TTFLoadGlyph(TTFFile& file, u32 index, MemoryArena* tempArena, MemoryArena* arena, TTFGlyph& result) {
     umm oldPosition = file.position;
 
     TTFSeekToTableOrFail("loca")
@@ -322,22 +322,6 @@ TTFLoadGlyph(TTFFile& file, u32 index, bool interpolate, MemoryArena* tempArena,
             point->y = y;
             pointIndex++;
         }
-    }
-
-    if (!interpolate) {
-        result.bbox.x0 = minX;
-        result.bbox.x1 = maxX;
-        result.bbox.y0 = minY;
-        result.bbox.y1 = maxY;
-        result.contourCount = contourCount;
-        result.contourEnds = contourEnds;
-        result.pointCount = pointCount;
-        result.points = points;
-        result.isOnCurve = isOnCurve;
-
-        file.position = oldPosition;
-
-        return true;
     }
 
     int totalPointsToAdd = 0;
@@ -475,7 +459,7 @@ TTFLoadGlyph(TTFFile& file, u32 index, bool interpolate, MemoryArena* tempArena,
 }
 
 bool
-TTFLoadCodepoint(TTFFile& file, u32 codepoint, bool interpolate, MemoryArena* tempArena, MemoryArena* arena, TTFGlyph& result) {
+TTFLoadCodepoint(TTFFile& file, u32 codepoint, MemoryArena* tempArena, MemoryArena* arena, TTFGlyph& result) {
     TTFSeekToTableOrFail("cmap")
     u16 version = TTFReadU16(file);
     u16 subtableCount = TTFReadU16(file);
@@ -544,5 +528,5 @@ TTFLoadCodepoint(TTFFile& file, u32 codepoint, bool interpolate, MemoryArena* te
         glyphIndex = idDelta + TTFReadU16(file);
     }
 
-    return TTFLoadGlyph(file, glyphIndex, interpolate, tempArena, arena, result);
+    return TTFLoadGlyph(file, glyphIndex, tempArena, arena, result);
 }

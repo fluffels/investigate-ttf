@@ -291,7 +291,6 @@ const char* ttfPath = "fonts/fa-regular-400.ttf";
 u32 testCodepoint = 0xf005;
 u32 testIndex = 61444;
 VulkanSampler glyphTexture = {};
-bool interpolateGlyph = true;
 bool debug = true;
 
 // ******************************
@@ -579,7 +578,7 @@ void renderIcon() {
     TTFFile ttfFile = {};
     TTFGlyph glyph = {};
     bool glyphLoaded = TTFLoadFromPath(ttfPath, &globalArena, ttfFile) &&
-                       TTFLoadCodepoint(ttfFile, testCodepoint, interpolateGlyph, &tempArena, &globalArena, glyph);
+                       TTFLoadCodepoint(ttfFile, testCodepoint, &tempArena, &globalArena, glyph);
                        // TTFLoadGlyph(ttfFile, testIndex, true, &tempArena, &globalArena, glyph);
     if (!glyphLoaded) {
         ERR("could not load TTF");
@@ -1196,7 +1195,7 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
     TTFFile ttfFile = {};
     TTFGlyph glyph = {};
     bool glyphLoaded = TTFLoadFromPath(ttfPath, &frameArena, ttfFile) &&
-                       TTFLoadCodepoint(ttfFile, testCodepoint, interpolateGlyph, &frameArena, &frameArena, glyph);
+                       TTFLoadCodepoint(ttfFile, testCodepoint, &frameArena, &frameArena, glyph);
                        // TTFLoadGlyph(ttfFile, testIndex, true, &tempArena, &globalArena, glyph);
     if (!glyphLoaded) {
         ERR("could not load TTF");
@@ -1552,11 +1551,6 @@ WindowProc(
                 case VK_NEXT: input.consolePageDown = true; break;
                 case VK_RETURN: input.consoleNewLine = true; break;
                 case VK_F1: input.consoleToggle = true; break;
-                case 'I': {
-                    interpolateGlyph = !interpolateGlyph;
-                    renderIcon();
-                    break;
-                }
                 case 'D': {
                     debug = !debug;
                     renderIcon();
