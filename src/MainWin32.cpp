@@ -589,7 +589,7 @@ void renderIcon() {
     const float glyphWidth = glyph.bbox.x1 - glyph.bbox.x0;
     const float glyphHeight = glyph.bbox.y1 - glyph.bbox.y0;
     #define xToStencil(n) ((n) - glyph.bbox.x0)
-    #define yToStencil(n) (glyphHeight - glyph.bbox.y0 - (n))
+    #define yToStencil(n) (glyphHeight - ((n) - glyph.bbox.y0))
     #define vecToStencil(new, old) Vec2 new = Vec2 { .x = xToStencil(old.x), .y = yToStencil(old.y) }
 
     // NOTE(jan): Push contour mesh.
@@ -1208,7 +1208,7 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
             .y = (windowHeight - glyphHeight) / 2.f,
         };
         #define xToScreen(n) ((n) - glyph.bbox.x0 + screenOffset.x)
-        #define yToScreen(n) ((windowHeight - screenOffset.y) - glyph.bbox.y0 - (n))
+        #define yToScreen(n) ((screenOffset.y + glyphHeight) - ((n) - glyph.bbox.y0))
         AABox centeredBox = {
             .x0 = xToScreen(glyph.bbox.x0),
             .x1 = xToScreen(glyph.bbox.x1),
