@@ -488,6 +488,7 @@ TTFLoadCodepoint(TTFFile& file, u32 codepoint, bool interpolate, MemoryArena* te
 
         if (platformID == 0) {
             unicodeSubtableOffset = offset;
+            break;
         }
     }
 
@@ -524,15 +525,16 @@ TTFLoadCodepoint(TTFFile& file, u32 codepoint, bool interpolate, MemoryArena* te
     u16 segmentIndex = 0;
     while (segmentIndex < segCount) {
         u16 endCode = endCodes[segmentIndex];
-        if (endCode > codepoint) break;
+        if (endCode >= codepoint) break;
         segmentIndex++;
     }
+    u16 startCode = startCodes[segmentIndex];
     u16 idRangeOffset = idRangeOffsets[segmentIndex];
     u16 idDelta = idDeltas[segmentIndex];
 
     umm glyphIndex;
     if (idRangeOffset == 0) {
-        glyphIndex = idDelta + codepoint;
+        glyphIndex = (idDelta + codepoint) % 65536;
     } else {
         u16 startCode = startCodes[segmentIndex];
 

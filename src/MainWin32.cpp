@@ -285,7 +285,11 @@ COLOUR_FROM_HEX(green,   0x85, 0x99, 0x00);
 COLOUR_FROM_HEX(cyan,    0x2a, 0xa1, 0x98);
 COLOUR_FROM_HEX(yellow,  0xb5, 0x89, 0x00);
 
-char testChar = 'B';
+// const char* ttfPath = "fonts/AzeretMono-Medium.ttf";
+// char testChar = 'B';
+const char* ttfPath = "fonts/fa-regular-400.ttf";
+u32 testCodepoint = 0xf005;
+u32 testIndex = 61444;
 VulkanSampler glyphTexture = {};
 bool interpolateGlyph = true;
 bool debug = true;
@@ -574,8 +578,9 @@ void renderIcon() {
 
     TTFFile ttfFile = {};
     TTFGlyph glyph = {};
-    bool glyphLoaded = TTFLoadFromPath("fonts/AzeretMono-Medium.ttf", &globalArena, ttfFile) &&
-                       TTFLoadCodepoint(ttfFile, testChar, interpolateGlyph, &tempArena, &globalArena, glyph);
+    bool glyphLoaded = TTFLoadFromPath(ttfPath, &globalArena, ttfFile) &&
+                       TTFLoadCodepoint(ttfFile, testCodepoint, interpolateGlyph, &tempArena, &globalArena, glyph);
+                       // TTFLoadGlyph(ttfFile, testIndex, true, &tempArena, &globalArena, glyph);
     if (!glyphLoaded) {
         ERR("could not load TTF");
         return;
@@ -1190,8 +1195,9 @@ void doFrame(Vulkan& vk, Renderer& renderer) {
 
     TTFFile ttfFile = {};
     TTFGlyph glyph = {};
-    bool glyphLoaded = TTFLoadFromPath("fonts/AzeretMono-Medium.ttf", &frameArena, ttfFile) &&
-                       TTFLoadCodepoint(ttfFile, testChar, interpolateGlyph, &frameArena, &frameArena, glyph);
+    bool glyphLoaded = TTFLoadFromPath(ttfPath, &frameArena, ttfFile) &&
+                       TTFLoadCodepoint(ttfFile, testCodepoint, interpolateGlyph, &frameArena, &frameArena, glyph);
+                       // TTFLoadGlyph(ttfFile, testIndex, true, &tempArena, &globalArena, glyph);
     if (!glyphLoaded) {
         ERR("could not load TTF");
     } else {
