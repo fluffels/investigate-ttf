@@ -342,6 +342,34 @@ pushTriangle(Mesh& mesh, Vec2& p0, Vec2& p1, Vec2& p2) {
 }
 
 void
+pushTriangleWithBarycenter(Mesh& mesh, Vec2& p0, Vec2& p1, Vec2& p2) {
+    umm baseIndex = mesh.vertexCount;
+
+    mesh.vertices.push_back(p0.x);
+    mesh.vertices.push_back(p0.y);
+    mesh.vertices.push_back(0);
+    mesh.vertices.push_back(0);
+    mesh.vertexCount++;
+
+    mesh.vertices.push_back(p1.x);
+    mesh.vertices.push_back(p1.y);
+    mesh.vertices.push_back(.5f);
+    mesh.vertices.push_back(0);
+    mesh.vertexCount++;
+
+    mesh.vertices.push_back(p2.x);
+    mesh.vertices.push_back(p2.y);
+    mesh.vertices.push_back(1);
+    mesh.vertices.push_back(1);
+    mesh.vertexCount++;
+
+    mesh.indices.push_back(baseIndex);
+    mesh.indices.push_back(baseIndex+1);
+    mesh.indices.push_back(baseIndex+2);
+    mesh.indexCount += 3;
+}
+
+void
 pushAABox(Mesh& mesh, AABox& box, AABox& tex, Vec4& color) {
     umm baseIndex = mesh.vertexCount;
 
@@ -582,8 +610,6 @@ void renderIcon() {
                 umm i2 = pointIndex;
                 pointIndex += 2;
 
-                INFO("%d -> %d", i1, i2);
-
                 Vec2 p1 = glyph.points[i1];
                 vecToStencil(p1Stencil, p1);
                 Vec2 p2 = glyph.points[i2];
@@ -593,7 +619,6 @@ void renderIcon() {
                 i1 = i2;
             }
 
-            INFO("lastPoint: %d", i1);
             Vec2 lastPoint = glyph.points[i1];
             vecToStencil(lastPointStencil, lastPoint);
             pushTriangle(contourMesh, p0, firstPointStencil, lastPointStencil);
@@ -634,7 +659,7 @@ void renderIcon() {
                 vecToStencil(p1Stencil, p1);
                 Vec2 p2 = glyph.points[i2];
                 vecToStencil(p2Stencil, p2);
-                pushTriangle(correctionMesh, p0Stencil, p1Stencil, p2Stencil);
+                pushTriangleWithBarycenter(correctionMesh, p0Stencil, p1Stencil, p2Stencil);
             }
 
             umm i0 = pointIndex++;
@@ -646,7 +671,7 @@ void renderIcon() {
             vecToStencil(p1Stencil, p1);
             Vec2 p2 = glyph.points[i2];
             vecToStencil(p2Stencil, p2);
-            pushTriangle(correctionMesh, p0Stencil, p1Stencil, p2Stencil);
+            pushTriangleWithBarycenter(correctionMesh, p0Stencil, p1Stencil, p2Stencil);
 
             contourIndex++;
         }
@@ -796,10 +821,10 @@ void renderIcon() {
             vkCmdBeginRenderPass(cmds, &info, VK_SUBPASS_CONTENTS_INLINE);
         }
 
-        VulkanPipeline pipeline;
+        VulkanPipeline contourPipeline;
         {
             PipelineInfo info = {
-                .name = "icon_stencil",
+                .name = "icon_stencil_contour",
                 .vertexShaderPath = "shaders/ortho_xy.vert.spv",
                 .fragmentShaderPath = "shaders/white.frag.spv",
                 .clockwiseWinding = true,
@@ -809,7 +834,23 @@ void renderIcon() {
                 .samples = VK_SAMPLE_COUNT_1_BIT,
                 .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
             };
-            initVKPipeline(vk, info, pipeline, &renderPass);
+            initVKPipeline(vk, info, contourPipeline, &renderPass);
+        }
+
+        VulkanPipeline correctionPipeline;
+        {
+            PipelineInfo info = {
+                .name = "icon_stencil_correction",
+                .vertexShaderPath = "shaders/ortho_xy_barycenter.vert.spv",
+                .fragmentShaderPath = "shaders/barycenter.frag.spv",
+                .clockwiseWinding = true,
+                .cullBackFaces = false,
+                .depthEnabled = false,
+                .writeStencilInvert = true,
+                .samples = VK_SAMPLE_COUNT_1_BIT,
+                .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+            };
+            initVKPipeline(vk, info, correctionPipeline, &renderPass);
         }
 
         float ortho[16];
@@ -821,13 +862,13 @@ void renderIcon() {
         VulkanBuffer uniformBuffer;
         createUniformBuffer(vk.device, vk.memories, vk.queueFamily, sizeof(ortho), uniformBuffer);
         updateBuffer(vk, uniformBuffer, ortho, sizeof(ortho));
+        updateUniformBuffer(vk.device, contourPipeline.descriptorSet, 0, uniformBuffer.handle);
+        updateUniformBuffer(vk.device, correctionPipeline.descriptorSet, 0, uniformBuffer.handle);
 
-        updateUniformBuffer(vk.device, pipeline.descriptorSet, 0, uniformBuffer.handle);
-
-        vkCmdBindPipeline(cmds, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle);
+        vkCmdBindPipeline(cmds, VK_PIPELINE_BIND_POINT_GRAPHICS, contourPipeline.handle);
         vkCmdBindDescriptorSets(
-            cmds, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout,
-            0, 1, &pipeline.descriptorSet,
+            cmds, VK_PIPELINE_BIND_POINT_GRAPHICS, contourPipeline.layout,
+            0, 1, &contourPipeline.descriptorSet,
             0, nullptr
         );
 
@@ -838,6 +879,13 @@ void renderIcon() {
             vkCmdDrawIndexed(cmds, 3, 1, i*3, 0, 0);
         }
         // vkCmdDrawIndexed(cmds, mesh.indices.size(), 1, 0, 0, 0);
+
+        vkCmdBindPipeline(cmds, VK_PIPELINE_BIND_POINT_GRAPHICS, correctionPipeline.handle);
+        vkCmdBindDescriptorSets(
+            cmds, VK_PIPELINE_BIND_POINT_GRAPHICS, correctionPipeline.layout, 
+            0, 1, &correctionPipeline.descriptorSet, 
+            0, nullptr
+        );
 
         vkCmdBindVertexBuffers(cmds, 0, 1, &vkCorrectionMesh.vBuff.handle, offsets);
         vkCmdBindIndexBuffer(cmds, vkCorrectionMesh.iBuff.handle, 0, VK_INDEX_TYPE_UINT32);
