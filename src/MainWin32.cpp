@@ -287,8 +287,9 @@ COLOUR_FROM_HEX(yellow,  0xb5, 0x89, 0x00);
 
 // const char* ttfPath = "fonts/AzeretMono-Medium.ttf";
 // char testChar = 'B';
-const char* ttfPath = "fonts/fa-regular-400.ttf";
-u32 testCodepoint = 0xf005;
+// const char* ttfPath = "fonts/fa-regular-400.ttf";
+const char* ttfPath = "fonts/fa-solid-900.ttf";
+u32 testCodepoint = 0xf1ec;
 u32 testIndex = 61444;
 VulkanSampler glyphTexture = {};
 bool debug = true;
@@ -595,39 +596,29 @@ void renderIcon() {
     Mesh contourMesh = {};
     VulkanMesh contourVKMesh = {};
     {
-        u16 pointIndex = 0;
-        u16 contourIndex = 0;
-        // NOTE(jan): Should this be outside?
         Vec2 p0 = { .x = 0, .y = 0 };
+        u16 contourStart = 0;
+        u16 contourIndex = 0;
         while (contourIndex < glyph.contourCount) {
             u16 contourEnd = glyph.contourEnds[contourIndex];
-            if (contourEnd - pointIndex + 1 < 2) {
-                pointIndex = contourEnd;
-                continue;
-            }
-            Vec2 firstPoint = glyph.points[pointIndex];
-            vecToStencil(firstPointStencil, firstPoint);
+            u16 pointsInContour = contourEnd - contourStart + 1;
+            u16 linesInContour = pointsInContour / 2;
+            while (!glyph.isOnCurve[contourStart]) contourStart++;
 
-            umm i1 = pointIndex;
-            pointIndex += 2;
-            while (pointIndex <= contourEnd) {
-                umm i2 = pointIndex;
-                pointIndex += 2;
-
+            for (u16 lineIndex = 0; lineIndex < linesInContour; lineIndex++) {
+                u16 i1 = contourStart + ((lineIndex * 2) % pointsInContour);
                 Vec2 p1 = glyph.points[i1];
                 vecToStencil(p1Stencil, p1);
+
+                u16 i2 = contourStart + ((lineIndex * 2 + 2) % pointsInContour);
                 Vec2 p2 = glyph.points[i2];
                 vecToStencil(p2Stencil, p2);
-                pushTriangle(contourMesh, p0, p1Stencil, p2Stencil);
 
-                i1 = i2;
+                pushTriangle(contourMesh, p0, p1Stencil, p2Stencil);
             }
 
-            Vec2 lastPoint = glyph.points[i1];
-            vecToStencil(lastPointStencil, lastPoint);
-            pushTriangle(contourMesh, p0, firstPointStencil, lastPointStencil);
-
             contourIndex++;
+            contourStart = contourEnd + 1;
         }
 
         uploadMesh(
@@ -642,20 +633,20 @@ void renderIcon() {
     Mesh correctionMesh = {};
     VulkanMesh vkCorrectionMesh = {};
     {
-        u16 pointIndex = 0;
+        u16 contourStart = 0;
         u16 contourIndex = 0;
         while (contourIndex < glyph.contourCount) {
             u16 contourEnd = glyph.contourEnds[contourIndex];
-            if (contourEnd - pointIndex + 1 < 3) {
-                pointIndex = contourEnd;
-                continue;
-            }
-            u16 contourStart = pointIndex;
+            u16 contourLength = contourEnd - contourStart;
+            u16 pointsInContour = contourLength + 1;
+            u16 contourOffset = 0;
+            while (!glyph.isOnCurve[contourStart + contourOffset]) contourOffset++;
+            u16 segmentsInContour = pointsInContour / 2;
 
-            while (pointIndex <= contourEnd - 3) {
-                umm i0 = pointIndex++;
-                umm i1 = pointIndex++;
-                umm i2 = pointIndex;
+            for (u16 segmentIndex = 0; segmentIndex < segmentsInContour; segmentIndex++) {
+                u16 i0 = contourStart + (contourOffset + segmentIndex * 2    ) % pointsInContour;
+                u16 i1 = contourStart + (contourOffset + segmentIndex * 2 + 1) % pointsInContour;
+                u16 i2 = contourStart + (contourOffset + segmentIndex * 2 + 2) % pointsInContour;
 
                 Vec2 p0 = glyph.points[i0];
                 vecToStencil(p0Stencil, p0);
@@ -666,18 +657,8 @@ void renderIcon() {
                 pushTriangleWithBarycenter(correctionMesh, p0Stencil, p1Stencil, p2Stencil);
             }
 
-            umm i0 = pointIndex++;
-            umm i1 = pointIndex++;
-            umm i2 = contourStart;
-            Vec2 p0 = glyph.points[i0];
-            vecToStencil(p0Stencil, p0);
-            Vec2 p1 = glyph.points[i1];
-            vecToStencil(p1Stencil, p1);
-            Vec2 p2 = glyph.points[i2];
-            vecToStencil(p2Stencil, p2);
-            pushTriangleWithBarycenter(correctionMesh, p0Stencil, p1Stencil, p2Stencil);
-
             contourIndex++;
+            contourStart = contourEnd + 1;
         }
 
         uploadMesh(
@@ -882,7 +863,6 @@ void renderIcon() {
         for (int i = 0; i < contourMesh.indices.size() / 3; i++) {
             vkCmdDrawIndexed(cmds, 3, 1, i*3, 0, 0);
         }
-        // vkCmdDrawIndexed(cmds, mesh.indices.size(), 1, 0, 0, 0);
 
         vkCmdBindPipeline(cmds, VK_PIPELINE_BIND_POINT_GRAPHICS, correctionPipeline.handle);
         vkCmdBindDescriptorSets(
