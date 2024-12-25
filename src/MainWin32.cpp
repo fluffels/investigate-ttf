@@ -286,11 +286,11 @@ COLOUR_FROM_HEX(cyan,    0x2a, 0xa1, 0x98);
 COLOUR_FROM_HEX(yellow,  0xb5, 0x89, 0x00);
 
 // const char* ttfPath = "fonts/AzeretMono-Medium.ttf";
+const char* ttfPath = "fonts/FiraCode-Bold.ttf";
 // char testChar = 'B';
 // const char* ttfPath = "fonts/fa-regular-400.ttf";
-const char* ttfPath = "fonts/fa-solid-900.ttf";
-u32 testCodepoint = 0xf1ec;
-u32 testIndex = 61444;
+// const char* ttfPath = "fonts/fa-solid-900.ttf";
+u32 testCodepoint = 0x0052;
 VulkanSampler glyphTexture = {};
 bool debug = true;
 
@@ -578,8 +578,8 @@ void renderIcon() {
 
     TTFFile ttfFile = {};
     TTFGlyph glyph = {};
-    bool glyphLoaded = TTFLoadFromPath(ttfPath, &globalArena, ttfFile) &&
-                       TTFLoadCodepoint(ttfFile, testCodepoint, &tempArena, &globalArena, glyph);
+    bool glyphLoaded = TTFLoadFromPath(ttfPath, &tempArena, ttfFile) &&
+                       TTFLoadCodepoint(ttfFile, testCodepoint, &tempArena, &tempArena, glyph);
                        // TTFLoadGlyph(ttfFile, testIndex, true, &tempArena, &globalArena, glyph);
     if (!glyphLoaded) {
         ERR("could not load TTF");
@@ -1105,6 +1105,8 @@ void renderIcon() {
 
         vkDeviceWaitIdle(vk.device);
     }
+
+    memoryArenaClear(&tempArena);
 }
 
 // ***************************
@@ -1645,7 +1647,7 @@ WinMain(
     Renderer renderer;
     init(vk, renderer);
 
-    renderIcon();
+    // renderIcon();
 
     // NOTE(jan): Main loop.
     bool done = false;
@@ -1668,6 +1670,7 @@ WinMain(
             DispatchMessage(&msg);
         }
 
+        renderIcon();
         doFrame(vk, renderer);
     }
 
