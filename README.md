@@ -6,6 +6,7 @@ Parses TTF files and renders glyphs from the contained font.
 
 ## Demo
 Rendering the calculator glyph from font awesome.
+
 https://github.com/user-attachments/assets/a6e2a174-1f1a-4b69-9bba-91d682c6901c
 
 ## TODO
